@@ -17,7 +17,10 @@ internal static class Program
             catch { }
         };
 
-        if (!TryAcquireSingleInstance())
+        // 试听探针（MIDIKEY_PREVIEW_PROBE=1，见 DevPreviewProbe.cs）只放音频、不发按键、
+        // 不注册全局热键，允许与用户正在用的实例并存。只有这一种情况跳过单实例检查，
+        // 正常启动行为不变。
+        if (!PreviewProbeMode.On && !TryAcquireSingleInstance())
         {
             try { MidiKeyPlayer.Persist.LogFile.Append("检测到已有一个实例在运行，本实例直接退出。"); }
             catch { }

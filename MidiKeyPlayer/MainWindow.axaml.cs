@@ -131,7 +131,8 @@ public partial class MainWindow : Window
             SaveSettings();
         };
 
-        if (Input.GlobalHotkeys.IsAvailable)
+        // 探针模式不注册全局热键：探针只放音频，不碰键盘（见 DevPreviewProbe.cs）
+        if (Input.GlobalHotkeys.IsAvailable && !PreviewProbeMode.On)
         {
             Input.GlobalHotkeys.Status += s => UiPost(() => InsertLog(s));
             Input.GlobalHotkeys.KeyState += OnGlobalKeyWorker;
@@ -183,7 +184,8 @@ public partial class MainWindow : Window
         InsertLog("欢迎使用 MIDI 按键播放器");
         InsertLog("用法：打开 MIDI → 点一行作为主旋律 → 按 F6，倒计时内切到目标程序并装备乐器。");
         InsertLog("控制热键：F6 = 开始 / 暂停 / 继续（目标程序中生效，可改）。");
-        if (OperatingSystem.IsWindows())
+        // 探针模式不建托盘图标：无人值守跑测，不往用户托盘里塞东西
+        if (OperatingSystem.IsWindows() && !PreviewProbeMode.On)
         {
             SetupTray();
             Opened += (_, _) => EnsureTray();
@@ -191,6 +193,7 @@ public partial class MainWindow : Window
         Opened += (_, _) => ShowQuickStartOnce();
 
         InstallDevSnapshot(this);   // 【开发用，可删】设了 MIDIKEY_UI_SNAPSHOT 才生效，见 DevUISnapshot.cs
+        InstallPreviewProbe(this);  // 【开发用，可删】设了 MIDIKEY_PREVIEW_PROBE=1 才生效，见 DevPreviewProbe.cs
     }
 
     // ================= 首次启动“快速上手” =================
@@ -756,49 +759,29 @@ public partial class MainWindow : Window
     // 或者某个音短于定时器间隔，也不会被漏掉 —— 采样式实现会成片吞音。
 
     private MidiPreview? _preview;
+    /// <summary>整曲试听调度器：独立线程 + timeBeginPeriod(1) + 短前瞻派发（见 Engine/MidiPreview.cs）。</summary>
+    private MidiPreviewSequencer? _previewSeq;
+    /// <summary>界面刷新定时器：低频（60ms），只把位置画到界面上。音频派发不在这里。</summary>
     private DispatcherTimer? _previewTimer;
-    private readonly List<(double T, int Pitch, bool Down)> _previewEvents = new();
-    /// <summary>每个音在"真实秒"下的起止，用于跳转时判断"跳进了哪个音的中间"。</summary>
-    private readonly List<(double S, double E, int Pitch)> _previewSpans = new();
     private double _previewTotal;
-    private int _previewNext;
-    /// <summary>试听位置的时间基准：位置 = (现在 - 基准) / 频率。跳转只需挪这个基准。</summary>
-    private long _previewBaseTicks;
     private bool _previewOn;
-    private readonly HashSet<int> _previewSounding = new();
+    /// <summary>事件表条数。诊断用（探针要打印它）。</summary>
+    internal int PreviewEventCount => _previewSeq?.EventCount ?? 0;
 
-    /// <summary>试听当前所在秒数（真实秒，已含速度）。</summary>
-    private double PreviewNow() =>
-        (System.Diagnostics.Stopwatch.GetTimestamp() - _previewBaseTicks)
-        / (double)System.Diagnostics.Stopwatch.Frequency;
+    /// <summary>试听当前所在秒数（真实秒，已含速度）。位置由调度器的单调时钟给出，UI 线程直接读。</summary>
+    private double PreviewNow()
+    {
+        var seq = _previewSeq;
+        return seq != null && _previewOn ? seq.PositionSeconds : _previewSeconds;
+    }
 
     /// <summary>
-    /// 试听中跳转到某个秒数：挪时间基准、放开所有在响的音、把事件游标移到该点之后，
-    /// 并且把"跳进去的那个音"补上（否则从音符中间跳过去这段就是哑的）。
+    /// 试听中跳转到某个秒数：交给调度线程处理。调度线程会**先清音**，
+    /// 再挪时间基准、移游标，并把"跳进去正在响的音"补上。
     /// </summary>
     private void PreviewSeekTo(double seconds)
     {
-        double t = Math.Clamp(seconds, 0, _previewTotal);
-        _previewBaseTicks = System.Diagnostics.Stopwatch.GetTimestamp()
-                            - (long)(t * System.Diagnostics.Stopwatch.Frequency);
-
-        _preview?.StopAll();
-        _previewSounding.Clear();
-
-        _previewNext = 0;
-        while (_previewNext < _previewEvents.Count && _previewEvents[_previewNext].T < t) _previewNext++;
-
-        if (_preview != null)
-        {
-            foreach (var s in _previewSpans)
-            {
-                if (s.S <= t && t < s.E)
-                {
-                    _preview.PlayNote(s.Pitch, velocity: 96, autoRelease: false);
-                    _previewSounding.Add(s.Pitch);
-                }
-            }
-        }
+        _previewSeq?.Seek(Math.Clamp(seconds, 0, _previewTotal));
     }
 
     /// <summary>试听按钮：点一下开始放声音，再点一下停止。</summary>
@@ -837,35 +820,26 @@ public partial class MainWindow : Window
             }
         }
 
-        // 与演奏同一套时间基准：谱面时间除以速度 = 真实秒
+        // 与演奏同一套时间基准：谱面时间除以速度 = 真实秒。
+        // 事件表只在 Load 里建一次，播放中不再重建。
         double speed = Math.Max(0.1, SliderSpeed.Value / 100.0);
-        const double gap = 0.02;   // 同音高重复时留出断开，否则不会重新触发
-        _previewEvents.Clear();
-        _previewSpans.Clear();
-        foreach (var n in notes)
-        {
-            double s = n.Start / speed;
-            double e = n.End / speed;
-            double off = Math.Max(s + 0.03, e - gap);
-            _previewEvents.Add((s, n.Pitch, true));
-            _previewEvents.Add((off, n.Pitch, false));
-            _previewSpans.Add((s, off, n.Pitch));
-        }
-        _previewEvents.Sort((a, b) => a.T.CompareTo(b.T));
+        var spans = new List<(double Start, double End, int Pitch)>(notes.Count);
+        foreach (var n in notes) spans.Add((n.Start, n.End, n.Pitch));
 
-        _previewNext = 0;
-        _previewSounding.Clear();
-        _previewTotal = _previewEvents.Count == 0 ? 0 : _previewEvents[^1].T;
+        _previewSeq ??= new MidiPreviewSequencer(_preview);
+        _previewSeq.Load(spans, speed);
+        _previewTotal = _previewSeq.TotalSeconds;
+
         // 从进度条当前位置开始试听（用户可能已经把指针拖到某处了）
         double startAt = Math.Clamp(SliderProgress.Value, 0, _previewTotal);
-        _previewBaseTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         _previewOn = true;
         BtnPreview.Content = "⏹ 停止试听";
         SliderProgress.Maximum = Math.Max(0.1, _previewTotal);
-        PreviewSeekTo(startAt);
+        _previewSeq.Start(startAt);   // 起独立调度线程，并按需 timeBeginPeriod(1)
 
-        _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(15) };
-        _previewTimer.Tick += (_, _) => PreviewTick();
+        // 进度条 / 时间 / 卷帘用低频定时器读位置：音频怎么派发都不影响界面，界面忙了也不影响音频
+        _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(60) };
+        _previewTimer.Tick += (_, _) => PreviewUiTick();
         _previewTimer.Start();
 
         // 试听也是"在播放"：让卷帘自动跟随播放头。少了这句，视口不滚动，
@@ -880,31 +854,18 @@ public partial class MainWindow : Window
         InsertLog($"试听开始：{notes.Count} 个音，约 {_previewTotal:F1}s（不发送按键）");
     }
 
-    private void PreviewTick()
+    /// <summary>
+    /// 界面刷新（60ms 一次）：只把调度器的当前位置画出来。
+    /// 音频派发在调度线程上，跟这里完全无关 —— 界面卡一下不会让声音卡。
+    /// </summary>
+    private void PreviewUiTick()
     {
-        if (!_previewOn || _preview == null) return;
+        if (!_previewOn) return;
 
         // 用户正在拖进度条/卷帘：这一帧不推进也不覆盖，把画面交给拖动
         if (_seeking) return;
 
         double t = PreviewNow();
-
-        // 一次补齐所有到点的事件（不是只看"当前这一刻"，所以不会漏音）
-        while (_previewNext < _previewEvents.Count && _previewEvents[_previewNext].T <= t)
-        {
-            var e = _previewEvents[_previewNext++];
-            if (e.Down)
-            {
-                _preview.PlayNote(e.Pitch, velocity: 96, autoRelease: false);
-                _previewSounding.Add(e.Pitch);
-            }
-            else
-            {
-                _preview.StopNote(e.Pitch);
-                _previewSounding.Remove(e.Pitch);
-            }
-        }
-
         double shown = Math.Min(t, _previewTotal);
         if (_previewTotal > 0)
         {
@@ -914,18 +875,29 @@ public partial class MainWindow : Window
             UpdateSeekNote(shown);
         }
 
-        if (_previewNext >= _previewEvents.Count) StopPreviewAudio();
+        if (_previewSeq is { IsFinished: true }) StopPreviewAudio();
     }
 
-    /// <summary>停止试听：放掉所有正在响的音，恢复按钮文字。</summary>
+    /// <summary>
+    /// 停止试听：停调度线程（它自己会清音），再补一次全清，保证不留残音。
+    /// 停止、跳转、换曲、关窗口都会走到这里。
+    /// </summary>
     private void StopPreviewAudio()
     {
-        if (!_previewOn && _previewTimer == null) return;
+        bool wasOn = _previewOn || (_previewSeq?.IsRunning ?? false);
+        // 【诊断用，可删】谁把试听停掉的（探针模式才记）
+        if (wasOn && PreviewJitterProbe.Enabled)
+        {
+            var st = new System.Diagnostics.StackTrace(1, false);
+            var frames = st.GetFrames() ?? Array.Empty<System.Diagnostics.StackFrame>();
+            PreviewJitterProbe.Note("StopPreviewAudio 调用点："
+                + string.Join(" <- ", frames.Take(4).Select(f => f.GetMethod()?.DeclaringType?.Name + "." + f.GetMethod()?.Name)));
+        }
         _previewOn = false;
         _previewTimer?.Stop();
         _previewTimer = null;
-        _previewSounding.Clear();
-        _preview?.StopAll();
+        _previewSeq?.Stop();        // 唤醒线程 → 等它退出 → 复原 1ms 定时器精度 → AllNotesOff
+        _preview?.AllNotesOff();    // 双保险：任何残余发声都关掉（CC123 + CC120）
         if (BtnPreview != null) BtnPreview.Content = "试听";
         // 试听结束就不再跟随播放头（演奏中的状态由 UpdateTransportUi 负责）
         if (Roll != null && _engine is not { IsRunning: true })
@@ -1088,9 +1060,19 @@ public partial class MainWindow : Window
     /// <summary>换歌前停掉旧曲（松开按键、释放引擎）。</summary>
     private void StopPlaybackForNewFile()
     {
-        if (_engine is not { IsRunning: true }) return;
-        StopPlaybackNow();
-        InsertLog("已停止当前播放（换歌）。");
+        if (_engine is { IsRunning: true })
+        {
+            StopPlaybackNow();
+            InsertLog("已停止当前播放（换歌）。");
+            return;
+        }
+        // 只在试听（没在演奏）时换歌也要停：否则旧谱面的事件表会继续往合成器发，
+        // 界面上换了歌、耳朵里还是上一首，而且换下去的残音没人收。
+        if (_previewOn || (_previewSeq?.IsRunning ?? false))
+        {
+            StopPreviewAudio();
+            InsertLog("已停止试听（换歌）。");
+        }
     }
 
     // ================= 主旋律选择 =================
@@ -2376,6 +2358,15 @@ public partial class MainWindow : Window
         _uiTimer?.Stop();
         _engine?.Stop();
         StopPreviewAudio();
+        // 【诊断用，可删】关窗口这条路的清音证据（探针模式才写）
+        if (PreviewProbeMode.On)
+        {
+            PreviewJitterProbe.Note($"关窗口：StopPreviewAudio 之后 sounding={_preview?.SoundingCount ?? -1}，"
+                + $"noteOn={_preview?.NoteOnCount ?? -1}，noteOff={_preview?.NoteOffCount ?? -1}");
+            PreviewJitterProbe.WriteReport();
+        }
+        _previewSeq?.Dispose();
+        _previewSeq = null;
         _preview?.Dispose();
         _preview = null;
         Input.GlobalHotkeys.Stop();

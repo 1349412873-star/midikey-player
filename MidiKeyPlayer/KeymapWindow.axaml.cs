@@ -40,13 +40,22 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
     private bool _rebuilding;           // 重建列表行中
 
     private readonly ObservableCollection<RowVM> _rows = new();
+    /// <summary>方块区的内容：已绑定的行（按音高从低到高）+ 最后那个「+ 加一条」方块。</summary>
+    private readonly ObservableCollection<RowVM> _blocks = new();
+    private readonly RowVM _addBlock = new() { IsAddBlock = true };
     private readonly ObservableCollection<FuncRowVM> _funcs = new();
     private RowVM? _row;                // 正在等待按键的主键行
     private FuncRowVM? _func;           // 正在等待按键的功能键行
     private bool _pendingNewRow;        // 等待中的是一条还没落地的「加一条」
 
+    /// <summary>单独按一下修饰键再松开就算绑上，这个窗口的时长是 400 毫秒。</summary>
+    private const int ModifierTapMs = 400;
+    private readonly DispatcherTimer _modTimer;
+    private string _modCandidate = "";  // 已经按下、还没松开的修饰键名（"" = 没有）
+
     private static readonly IReadOnlyList<string> KeyNameChoices = new List<string>
     {
+        "Shift", "Ctrl", "Alt",
         "Space", "Enter", "Tab", "Backspace", "Insert", "Delete", "Home", "End", "PageUp", "PageDown",
         "↑", "↓", "←", "→",
         "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
@@ -70,13 +79,22 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         _rememberSettings = rememberSettings ?? (() => { });
         _applyProfileSettings = applyProfileSettings ?? (_ => null);
 
+        _modTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(ModifierTapMs) };
+        _modTimer.Tick += (_, _) =>
+        {
+            _modTimer.Stop();
+            if (_modCandidate.Length > 0)
+                Say($"已经按住超过 {ModifierTapMs} 毫秒。松开 {_modCandidate} 仍然绑它；按别的键就是组合键。");
+        };
+
         InitializeComponent();
         DataContext = this;
 
-        BindRows.ItemsSource = _rows;
+        BindBlocks.ItemsSource = _blocks;
         FuncRows.ItemsSource = _funcs;
 
         KeyDown += Window_KeyDown;
+        KeyUp += Window_KeyUp;
         InitUi();
     }
 
@@ -98,22 +116,78 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
 
     private void InitUi()
     {
-        _loading = true;
-        try
-        {
-            OutOfRangeCombo.ItemsSource = new List<string> { "不弹这个音", "挪到最近的八度再弹" };
-            MissingNoteCombo.ItemsSource = new List<string> { "用最近的音代替", "跳过这个音" };
-        }
-        finally
-        {
-            _loading = false;
-        }
         RefreshUi();
         if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_KEYMAP")))
             Dispatcher.UIThread.Post(ReportLayout, DispatcherPriority.Background);
         if (Environment.GetEnvironmentVariable("MIDIKEY_KEYMAP_PROBE_ROUNDTRIP") is string step
             && (step == "1" || step == "2"))
             Dispatcher.UIThread.Post(() => RoundTripProbe(step), DispatcherPriority.Background);
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MIDIKEY_KEYMAP_PROBE_MODIFIER")))
+            Dispatcher.UIThread.Post(ModifierProbe);
+    }
+
+    /// <summary>
+    /// 【开发用，可删】修饰键单击验证：给「升高八度」按一下 Shift 再松开，看绑成什么。
+    /// 用环境变量 MIDIKEY_KEYMAP_PROBE_MODIFIER=1 打开，结果写 %TEMP%\midikey-modifier-probe.log。
+    /// 走的是真的 Window_KeyDown / Window_KeyUp，不是另写一套判断。
+    /// </summary>
+    private void ModifierProbe()
+    {
+        string log = Path.Combine(Path.GetTempPath(), "midikey-modifier-probe.log");
+        void W(string line)
+        {
+            try { File.AppendAllText(log, line + "\n"); } catch { }
+        }
+        try
+        {
+            var func = _funcs.FirstOrDefault(f => f.Tag == "up");
+            if (func == null) { W("探针失败：找不到「升高八度」这一行"); return; }
+
+            W($"== 修饰键单击探针（活动方案 = {_keymap.Name}）==");
+            BeginWait(func);
+            W($"1) 点「{func.Label}」键帽进等待：按钮文字 = 「{func.KeyCapText}」，等待中 = {func.Waiting}");
+
+            var down = new KeyEventArgs { Key = Key.LeftShift, KeyModifiers = KeyModifiers.Shift };
+            Window_KeyDown(this, down);
+            W($"2) 按下 LeftShift：按钮文字 = 「{func.KeyCapText}」，等待中 = {func.Waiting}，"
+              + $"方案 octaveUp 还是 = 「{_keymap.OctaveUp}」");
+
+            var up = new KeyEventArgs { Key = Key.LeftShift, KeyModifiers = KeyModifiers.None };
+            Window_KeyUp(this, up);
+            W($"3) 松开 LeftShift：方案 octaveUp = 「{_keymap.OctaveUp}」，"
+              + $"按钮文字 = 「{func.KeyCapText}」，等待中 = {func.Waiting}");
+
+            string json = File.Exists(KeymapProfile.FilePath) ? File.ReadAllText(KeymapProfile.FilePath) : "";
+            string octaveLine = json.Split('\n').FirstOrDefault(l => l.Contains("octaveUp", StringComparison.Ordinal)) ?? "(没找到)";
+            W($"4) 写进 keymap.json 的那一行：{octaveLine.Trim()}");
+
+            // 方块区两条主路径：加一条再按一个键、点音名区改音高
+            int keysBefore = _keymap.Keys.Count;
+            RowAdd_Click(null, new RoutedEventArgs());
+            var pending = _rows.LastOrDefault();
+            W($"5) 点「+ 加一条」：绑定 {keysBefore} → {_keymap.Keys.Count} 条（还没落地）；"
+              + $"方块 {_blocks.Count} 个，最后一个是「{_blocks[^1].KeyCapText}」；"
+              + $"新方块在第 {_blocks.IndexOf(pending!)} 位（倒数第二个 = 加一条方块之前），"
+              + $"按钮文字「{pending?.KeyCapText}」，等待中 = {pending?.Waiting}");
+
+            Window_KeyDown(this, new KeyEventArgs { Key = Key.Q });
+            W($"6) 按 Q：绑定 {_keymap.Keys.Count} 条，键盘表最后一项 = {_keymap.Keys[^1]}；"
+              + $"新方块落回音高序列（第 {_blocks.IndexOf(pending!)} 位），方块文字「{pending?.KeyCapText}」");
+
+            string firstLabel = pending?.PitchLabel ?? "";
+            ApplyPitch(pending!, PitchChoices().Last());
+            W($"7) 把它的音高从「{firstLabel}」改成下拉最后一项「{pending?.PitchLabel}」："
+              + $"方案里的偏移 = {pending?.Source?.Offset}，方块文字「{pending?.KeyCapText}」，"
+              + $"按钮大字「{pending?.PitchName}」，小字「{pending?.PitchDegree}」");
+
+            // 收尾：把探针加的这条拆掉，方案回到原样（脚本还会再还原一次 keymap.json）
+            RowRemove_Click(new Button { DataContext = pending }, new RoutedEventArgs());
+            W($"8) 收尾：绑定 {_keymap.Keys.Count} 条，方块 {_blocks.Count} 个");
+        }
+        catch (Exception ex)
+        {
+            W("探针失败：" + ex);
+        }
     }
 
     /// <summary>
@@ -167,22 +241,18 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         }
     }
 
-    /// <summary>整窗铺一次：方案行、三个功能键、音域与取舍、统计行。</summary>
+    /// <summary>整窗铺一次：方案行、按键方块、三个功能键、半音处理、统计行。</summary>
     private void RefreshUi()
     {
-        if (BindRows == null) return;
+        if (BindBlocks == null) return;
         _loading = true;
         try
         {
             FillSchemeCombo();
             FillFuncRows();
-            TxtMinNote.Text = _keymap.ResolveMinNote().ToString();
-            TxtMaxNote.Text = _keymap.ResolveMaxNote().ToString();
-            TxtMinNoteName.Text = NoteNameOf(_keymap.ResolveMinNote());
-            TxtMaxNoteName.Text = NoteNameOf(_keymap.ResolveMaxNote());
-            OutOfRangeCombo.SelectedIndex = _keymap.OutOfRange == OutOfRangeMode.Fold ? 1 : 0;
-            MissingNoteCombo.SelectedIndex = _keymap.MissingNote == MissingNoteMode.Drop ? 1 : 0;
-            ClearRangeBad();
+            RadMissingSkip.IsChecked = _keymap.MissingNote == MissingNoteMode.Skip;
+            RadMissingUp.IsChecked = _keymap.MissingNote == MissingNoteMode.Up;
+            RadMissingDown.IsChecked = _keymap.MissingNote == MissingNoteMode.Down;
             RefreshMenuEnabled();
         }
         finally
@@ -226,7 +296,10 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         }
     }
 
-    /// <summary>按键绑定列表：只列已绑定的行，按音高从低到高。</summary>
+    /// <summary>
+    /// 按键方块区：已绑定的行按音高从低到高排，没落地的「加一条」排在最后，
+    /// 再往后固定是那个虚线方块。一行放不下由 WrapPanel 自动换行。
+    /// </summary>
     private void RebuildRows()
     {
         _rebuilding = true;
@@ -247,12 +320,30 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
             SyncRowPitchChoices();
             var waiting = ActiveRow();
             if (waiting != null) waiting.Waiting = true;
+
+            SyncBlocks();
         }
         finally
         {
             _rebuilding = false;
         }
         RaiseStats();
+    }
+
+    /// <summary>
+    /// 把 _rows 与「加一条」方块一起铺进方块区。
+    /// 已落地的行按音高从低到高排（不能直接用 _rows 的顺序：刚落地的那条还在 _rows 末尾），
+    /// 没落地的空行放最后，再往后固定是「+ 加一条」。
+    /// </summary>
+    private void SyncBlocks()
+    {
+        _blocks.Clear();
+        foreach (var r in _rows.Where(r => r.Source != null)
+                               .OrderBy(r => r.Pitch)
+                               .ThenBy(r => Math.Abs(r.Source!.Offset)))
+            _blocks.Add(r);
+        foreach (var r in _rows.Where(r => r.Source == null)) _blocks.Add(r);
+        _blocks.Add(_addBlock);
     }
 
     private RowVM NewRow(KeyBinding kb, int rowNo) => new()
@@ -265,7 +356,7 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         KeyChoices = KeyNameChoices,
     };
 
-    /// <summary>等待态没有落地时也要有内容可铺：音域内的音高列表，格式形如 C4  1(do)。</summary>
+    /// <summary>等待态没有落地时也要有内容可铺：能弹范围内的音高列表，格式形如 C4  1(do)。</summary>
     private void SyncRowPitchChoices()
     {
         var choices = PitchChoices();
@@ -304,15 +395,12 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
     private static string NoteLabel(int pitch)
         => $"{Music.NoteName(pitch)}  {Music.DegreeName(pitch)}({SyllableOf(pitch)})";
 
-    /// <summary>十二个半音各自的唱名（升号与它的本位音同名）。</summary>
-    private static readonly string[] Syllables =
-        { "do", "do", "re", "re", "mi", "fa", "fa", "sol", "sol", "la", "la", "si" };
-
     /// <summary>音高的唱名。简谱带升号时用本位音的唱名，例如 #4 写 fa。</summary>
     private static string SyllableOf(int pitch) => Syllables[Music.Mod(pitch, 12)];
 
-    /// <summary>音名。例如 C4、C#6。</summary>
-    private static string NoteNameOf(int pitch) => Music.NoteName(Math.Clamp(pitch, 0, 127));
+    /// <summary>十二个半音各自的唱名（升号与它的本位音同名）。</summary>
+    private static readonly string[] Syllables =
+        { "do", "do", "re", "re", "mi", "fa", "fa", "sol", "sol", "la", "la", "si" };
 
     /// <summary>键名在按钮上的显示。鼠标键写中文，逗号写全角并加小字「逗号」。</summary>
     private static string DisplayKey(string? key) => string.IsNullOrEmpty(key) ? "" : DisplayKeyText(key);
@@ -357,12 +445,37 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
     private RowVM? ActiveRow() => _rows.FirstOrDefault(r => r.Waiting);
     private FuncRowVM? ActiveFuncRow() => _funcs.FirstOrDefault(f => f.Waiting);
 
-    /// <summary>点主键行的键帽：进入等待。</summary>
-    private void RowKey_Click(object? sender, RoutedEventArgs e)
+    /// <summary>点方块下半（按键区）：进入等待，再按一个键就把这个键绑到这个音。</summary>
+    private void BlockKey_Click(object? sender, RoutedEventArgs e)
     {
         if (sender is not Control c || c.DataContext is not RowVM row) return;
         BeginWait(row);
         e.Handled = true;   // 不要让这次点击冒到窗口，被当成「点别处」
+    }
+
+    /// <summary>点方块上半（音名区）：开一个音高下拉，选完立刻改音高。</summary>
+    private void BlockPitch_Click(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control c || c.DataContext is not RowVM row) return;
+        e.Handled = true;
+        EndWaiting(false);
+
+        var list = new ListBox
+        {
+            ItemsSource = PitchChoices(),
+            SelectedItem = row.PitchLabel,
+            MinWidth = 120,
+            MaxHeight = 260,
+            FontSize = 12.5,
+        };
+        var flyout = new Flyout { Content = list, Placement = PlacementMode.Bottom };
+        list.SelectionChanged += (_, _) =>
+        {
+            if (list.SelectedItem is not string label) return;
+            flyout.Hide();
+            ApplyPitch(row, label);
+        };
+        flyout.ShowAt(c);
     }
 
     /// <summary>点功能键的键帽：进入等待。</summary>
@@ -380,7 +493,7 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         _func = null;
         _pendingNewRow = false;
         row.Waiting = true;
-        Say($"正在等按键：按一个键就绑到 {Music.NoteName(row.Pitch)}。按 Esc 取消，也可以点「选键名」。");
+        Say($"正在等按键：按一个键就绑到 {Music.NoteName(row.Pitch)}。按 Esc 取消。Shift、Ctrl、Alt 单独按一下再松开也行。");
     }
 
     private void BeginWait(FuncRowVM row)
@@ -390,7 +503,7 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         _func = row;
         _pendingNewRow = false;
         row.Waiting = true;
-        Say($"正在等按键：按一个键就作为「{row.Label}」。按 Esc 取消，也可以点「选键名」。");
+        Say($"正在等按键：按一个键就作为「{row.Label}」。按 Esc 取消。Shift、Ctrl、Alt 单独按一下再松开也行。");
     }
 
     /// <summary>退出等待。commit = true 表示这一条已经落地，不用回滚。</summary>
@@ -402,6 +515,7 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         _row = null;
         _func = null;
         _pendingNewRow = false;
+        CancelModifierTap();
 
         if (row != null) row.Waiting = false;
         if (func != null) func.Waiting = false;
@@ -409,8 +523,61 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         if (!commit && pending && row is { Source: null })
         {
             _rows.Remove(row);
+            SyncBlocks();
             RaiseStats();
         }
+    }
+
+    // ================= 单独按修饰键 =================
+
+    /// <summary>
+    /// 修饰键的键名。认不出返回 null。Windows 上按 Alt 会走 <see cref="Key.System"/>，
+    /// 这时靠按住的修饰键来认。
+    /// </summary>
+    private static string? ModifierNameOf(KeyEventArgs e)
+    {
+        if (e.Key is Key.LeftShift or Key.RightShift) return "Shift";
+        if (e.Key is Key.LeftCtrl or Key.RightCtrl) return "Ctrl";
+        if (e.Key is Key.LeftAlt or Key.RightAlt) return "Alt";
+        if (e.Key == Key.System)
+        {
+            if (e.KeyModifiers.HasFlag(KeyModifiers.Control)) return "Ctrl";
+            if (e.KeyModifiers.HasFlag(KeyModifiers.Shift)) return "Shift";
+            return "Alt";
+        }
+        return null;
+    }
+
+    private static bool IsAnyModifierKey(Key key) =>
+        key is Key.LeftShift or Key.RightShift or Key.LeftCtrl or Key.RightCtrl
+            or Key.LeftAlt or Key.RightAlt or Key.System;
+
+    /// <summary>按下修饰键：先记下来，等松开。期间按了别的键就当组合键，不算绑定。</summary>
+    private void ArmModifierTap(string name)
+    {
+        _modCandidate = name;
+        _modTimer.Stop();
+        _modTimer.Start();
+        Say($"正在等按键：松开 {name} 就把它绑上（{ModifierTapMs} 毫秒内）。按别的键就是组合键，不会绑 {name}。");
+    }
+
+    private void CancelModifierTap()
+    {
+        _modCandidate = "";
+        _modTimer.Stop();
+    }
+
+    /// <summary>松开修饰键：这一下如果没有夹着别的键，就把它绑上。</summary>
+    private void Window_KeyUp(object? sender, KeyEventArgs e)
+    {
+        if (_modCandidate.Length == 0) return;
+        if (ActiveRow() == null && ActiveFuncRow() == null) { CancelModifierTap(); return; }
+        if (!IsAnyModifierKey(e.Key)) return;
+
+        string name = _modCandidate;
+        CancelModifierTap();
+        CommitKey(name);
+        e.Handled = true;
     }
 
     /// <summary>窗口级按键录入。只有在等待态才处理。</summary>
@@ -426,12 +593,17 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        if (IsModifierOnly(e.Key))
+        // Shift / Ctrl / Alt：单独按一下再松开也算一个键，先记下，等松开再绑
+        string? mod = ModifierNameOf(e);
+        if (mod != null)
         {
-            // Shift / Ctrl / Alt 单独按不算一个键：记下状态，继续等
-            Say("Shift、Ctrl、Alt 这些键要跟别的键一起按。请再按一次。");
+            ArmModifierTap(mod);
+            e.Handled = true;
             return;
         }
+
+        // 按了别的键：刚才那个修饰键是组合键的一部分，取消掉
+        CancelModifierTap();
 
         string? label = KeyLabelOf(e.Key);
         if (label == null) return;
@@ -452,10 +624,6 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         CommitKey(label);
     }
 
-    private static bool IsModifierOnly(Key key) =>
-        key is Key.LeftShift or Key.RightShift or Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt
-            or Key.LWin or Key.RWin or Key.System or Key.None;
-
     /// <summary>窗口级指针录入：等待中按鼠标键就绑上。点在正在等待的按钮本身上不算。</summary>
     private void Window_PointerPressed(object? sender, PointerPressedEventArgs e)
     {
@@ -470,6 +638,9 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
             _ => null,
         };
         if (label == null) return;
+
+        // 鼠标一点，之前按下的修饰键就不算「单独按一下」了
+        CancelModifierTap();
 
         // 点「选键名」链接、或者点已经打开的键名下拉：不算绑鼠标键
         if (IsKeyNameUx(e.Source as Visual)) return;
@@ -545,12 +716,13 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         }
         row.KeyText = DisplayKeyText(canonical);
         ApplyDuplicates();
+        SyncBlocks();     // 新落地的这条要按音高排回队伍里
         RaiseStats();
         Apply($"{Music.NoteName(row.Pitch)} 已绑到 {DisplayKeyText(canonical)}"
               + (same.Count > 0 ? "。这个键还绑在别的音上，两个音都会响。" : "。"));
     }
 
-    // ================= 主键行：音高 / 删除 / 加一条 =================
+    // ================= 主键方块：音高 / 解绑 / 加一条 =================
 
     private void RowAdd_Click(object? sender, RoutedEventArgs e)
     {
@@ -567,6 +739,7 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         };
         row.PitchChoices = PitchChoices();
         _rows.Add(row);
+        SyncBlocks();
         RaiseStats();
         BeginWait(row);
         _pendingNewRow = true;
@@ -580,19 +753,19 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         {
             if (ReferenceEquals(_row, row)) EndWaiting(false);
             _keymap.Keys.Remove(row.Source);
-            Apply($"已删除 {Music.NoteName(row.Pitch)} 上的绑定。");
+            Apply($"已解绑 {Music.NoteName(row.Pitch)}。");
         }
         _rows.Remove(row);
         ApplyDuplicates();
+        SyncBlocks();
         RaiseStats();
         e.Handled = true;
     }
 
-    private void Pitch_Changed(object? sender, SelectionChangedEventArgs e)
+    /// <summary>把某一行的音高改成下拉里选中的那个。音高变了顺序也要跟着重排。</summary>
+    private void ApplyPitch(RowVM row, string label)
     {
         if (_loading || _rebuilding) return;
-        if (sender is not ComboBox c || c.DataContext is not RowVM row) return;
-        if (c.SelectedItem is not string label) return;
 
         int pitch = PitchOfLabel(label, row.Pitch);
         if (pitch == row.Pitch && row.Source != null) return;
@@ -607,6 +780,8 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         {
             row.Pitch = pitch;
         }
+        SyncRowPitchChoices();
+        SyncBlocks();
         RaiseStats();
     }
 
@@ -674,119 +849,34 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         _ => label,
     };
 
-    // ================= 音域与取舍 =================
+    // ================= 半音怎么处理 =================
 
-    private void Number_KeyDown(object? sender, KeyEventArgs e)
-    {
-        if (e.Key != Key.Enter) return;
-        ApplyNumber(sender as TextBox);
-        e.Handled = true;
-    }
-
-    private void Number_LostFocus(object? sender, RoutedEventArgs e) => ApplyNumber(sender as TextBox);
-
-    private void ApplyNumber(TextBox? box)
-    {
-        if (box == null || _loading) return;
-        int lo = _keymap.ResolveMinNote();
-        int hi = _keymap.ResolveMaxNote();
-
-        if (!int.TryParse((box.Text ?? "").Trim(), out int v))
-        {
-            RestoreRange(lo, hi);
-            MarkRangeBad("音域要填 0 到 127 之间的整数。");
-            return;
-        }
-        v = Math.Clamp(v, 0, 127);
-
-        if (ReferenceEquals(box, TxtMinNote))
-        {
-            if (v >= hi)
-            {
-                RestoreRange(lo, hi);
-                MarkRangeBad("下面的音不能高于上面的音");
-                return;
-            }
-            _keymap.MinNote = v;
-        }
-        else if (ReferenceEquals(box, TxtMaxNote))
-        {
-            if (v <= lo)
-            {
-                RestoreRange(lo, hi);
-                MarkRangeBad("下面的音不能高于上面的音");
-                return;
-            }
-            _keymap.MaxNote = v;
-        }
-        else
-        {
-            return;
-        }
-
-        ClearRangeBad();
-        Apply($"音域已改：能弹 {Music.NoteName(_keymap.ResolveMinNote())} 到 {Music.NoteName(_keymap.ResolveMaxNote())}。");
-        // 音域变了，音高下拉与统计行都要跟着变
-        FillSchemeCombo();
-        SyncRowPitchChoices();
-        RaiseStats();
-        bool wasLoading = _loading;
-        _loading = true;
-        try
-        {
-            TxtMinNote.Text = _keymap.ResolveMinNote().ToString();
-            TxtMaxNote.Text = _keymap.ResolveMaxNote().ToString();
-            TxtMinNoteName.Text = NoteNameOf(_keymap.ResolveMinNote());
-            TxtMaxNoteName.Text = NoteNameOf(_keymap.ResolveMaxNote());
-        }
-        finally
-        {
-            _loading = wasLoading;
-        }
-    }
-
-    private void RestoreRange(int lo, int hi)
-    {
-        bool wasLoading = _loading;
-        _loading = true;
-        try
-        {
-            TxtMinNote.Text = lo.ToString();
-            TxtMaxNote.Text = hi.ToString();
-        }
-        finally
-        {
-            _loading = wasLoading;
-        }
-    }
-
-    private void MarkRangeBad(string message)
-    {
-        TxtMinNote.Classes.Add("bad");
-        TxtMaxNote.Classes.Add("bad");
-        if (TxtRangeError != null)
-        {
-            TxtRangeError.Text = message;
-            TxtRangeError.IsVisible = true;
-        }
-        Say(message);
-    }
-
-    private void ClearRangeBad()
-    {
-        TxtMinNote.Classes.Remove("bad");
-        TxtMaxNote.Classes.Remove("bad");
-        if (TxtRangeError != null) TxtRangeError.IsVisible = false;
-    }
-
-    private void Policy_Changed(object? sender, SelectionChangedEventArgs e)
+    /// <summary>
+    /// 三选一：缺的那个半音是跳过，还是用上/下那个音代替。
+    /// 音域没有输入框，能弹范围完全由键位推导，这里只影响范围内的半音。
+    /// </summary>
+    private void MissingNote_Checked(object? sender, RoutedEventArgs e)
     {
         if (_loading) return;
-        _keymap.OutOfRange = OutOfRangeCombo.SelectedIndex == 1 ? OutOfRangeMode.Fold : OutOfRangeMode.Drop;
-        _keymap.MissingNote = MissingNoteCombo.SelectedIndex == 1 ? MissingNoteMode.Drop : MissingNoteMode.Snap;
-        Apply($"已更新：超出音域的音 = {(OutOfRangeCombo.SelectedIndex == 1 ? "挪到最近的八度再弹" : "不弹这个音")}，"
-              + $"音域内缺音 = {(MissingNoteCombo.SelectedIndex == 1 ? "跳过这个音" : "用最近的音代替")}。");
+        if (sender is not RadioButton rb) return;
+
+        var mode = rb.Name switch
+        {
+            nameof(RadMissingSkip) => MissingNoteMode.Skip,
+            nameof(RadMissingDown) => MissingNoteMode.Down,
+            _ => MissingNoteMode.Up,
+        };
+        if (_keymap.MissingNote == mode) return;
+        _keymap.MissingNote = mode;
+        Apply($"半音处理已改：{MissingNoteText(mode)}。");
     }
+
+    private static string MissingNoteText(MissingNoteMode mode) => mode switch
+    {
+        MissingNoteMode.Skip => "跳过这个音",
+        MissingNoteMode.Up => "用高半音代替",
+        _ => "用低半音代替",
+    };
 
     // ================= 方案管理 =================
 
@@ -939,7 +1029,7 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         {
             EndWaiting(false);
             bool ok = await Confirm("恢复默认设置",
-                "把当前方案的键位、功能键、音域与两条取舍改回初始值？你的其他方案不受影响。", "恢复", danger: false);
+                "把当前方案的键位、功能键与半音处理改回初始值？你的其他方案不受影响。", "恢复", danger: false);
             if (!ok) return;
 
             string keepName = _keymap.Name;
@@ -1276,15 +1366,18 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
             double contentH = this.Content is Control c ? c.Bounds.Height : 0;
             double extent = MainScroll?.Extent.Height ?? 0;
             double viewport = MainScroll?.Viewport.Height ?? 0;
-            double listExtent = BindListScroll?.Extent.Height ?? 0;
-            double listViewport = BindListScroll?.Viewport.Height ?? 0;
+            double cardSum = 0;
+            if (MainScroll?.Content is Control scrollBody)
+                foreach (var child in scrollBody.GetVisualChildren().OfType<Control>())
+                    cardSum += child.Bounds.Height;
             string line = $"[键位窗口#{GetHashCode()}] 窗口 {Bounds.Width:F0}x{Bounds.Height:F0}；内容高 {contentH:F0}；"
                           + $"滚动区 内容 {extent:F0} / 视口 {viewport:F0}；需要滚动={extent > viewport + 0.5}；"
-                          + $"绑定列表 内容 {listExtent:F0} / 视口 {listViewport:F0}；"
-                          + $"列表需要滚动={listExtent > listViewport + 0.5}；"
-                          + $"绑定 {BindCount()} 条；行 {_rows.Count} 条；"
+                          + $"四块合计 {cardSum:F0}；"
+                          + $"绑定 {BindCount()} 条；方块 {_blocks.Count} 个（含「加一条」）；"
                           + $"等待行={(_row == null ? "无" : _row.PitchLabel)}"
                           + $" 等待功能键={(_func?.Label ?? "无")}；"
+                          + $"半音处理={MissingNoteText(_keymap.MissingNote)}；"
+                          + $"方案={_keymap.Name}；能弹 {Music.NoteName(_keymap.ResolveMinNote())}~{Music.NoteName(_keymap.ResolveMaxNote())}；"
                           + $"统计「{StatsText}」";
             Console.WriteLine(line);
             try
@@ -1336,19 +1429,20 @@ internal abstract class KeyCapRow : INotifyPropertyChanged
     /// <summary>等待态描边色。取现有主题资源，不自造配色。</summary>
     public IBrush? WaitBorderBrush => Waiting ? FindBrush("BrushAccent") : null;
 
-    private static IBrush? FindBrush(string key) =>
+    protected static IBrush? FindBrush(string key) =>
         Application.Current != null && Application.Current.TryFindResource(key, out object? brush) && brush is IBrush b
             ? b
             : null;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    /// <summary>子类改自己的字段也走这里。</summary>
-    protected void Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
+    /// <summary>子类改自己的字段也走这里。返回 true 表示值真的变了。</summary>
+    protected bool Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
     {
-        if (EqualityComparer<T>.Default.Equals(field, value)) return;
+        if (EqualityComparer<T>.Default.Equals(field, value)) return false;
         field = value;
         OnSet(name);
+        return true;
     }
 
     /// <summary>字段变了之后要通知哪些属性。派生类可以补充。</summary>
@@ -1370,20 +1464,93 @@ internal abstract class KeyCapRow : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
 
-/// <summary>一行主键绑定。</summary>
+/// <summary>
+/// 一个键帽方块。已绑定的音与最后那个「+ 加一条」方块共用同一个模型：
+/// <see cref="IsAddBlock"/> 为 true 的就是虚线方块。
+/// </summary>
 internal sealed class RowVM : KeyCapRow
 {
     public KeyBinding? Source { get; set; }
     public int RowNo { get; set; }
-    public int Pitch { get; set; }
+
+    private int _pitch;
+    /// <summary>这个键弹出的音高（MIDI 编号）。</summary>
+    public int Pitch
+    {
+        get => _pitch;
+        set
+        {
+            if (!Set(ref _pitch, value)) return;
+            Raise(nameof(PitchName));
+            Raise(nameof(PitchDegree));
+        }
+    }
+
     public IReadOnlyList<string> PitchChoices { get; set; } = Array.Empty<string>();
     public IReadOnlyList<string> KeyChoices { get; set; } = Array.Empty<string>();
 
+    /// <summary>方块左上角的大字：音名，例如 C4。</summary>
+    public string PitchName => Music.NoteName(_pitch);
+
+    /// <summary>音名下面的小字：简谱加唱名，例如 1(do)。</summary>
+    public string PitchDegree => $"{Music.DegreeName(_pitch)}({SyllableOf(_pitch)})";
+
+    private static readonly string[] Syllables =
+        { "do", "do", "re", "re", "mi", "fa", "fa", "sol", "sol", "la", "la", "si" };
+
+    private static string SyllableOf(int pitch) => Syllables[Music.Mod(pitch, 12)];
+
     private string _pitchLabel = "";
+    /// <summary>音高下拉里的写法，形如「C4  1(do)」。</summary>
     public string PitchLabel { get => _pitchLabel; set => Set(ref _pitchLabel, value); }
 
     private bool _duplicate;
-    public bool IsDuplicate { get => _duplicate; set => Set(ref _duplicate, value); }
+    /// <summary>同一个物理键绑到了多个音：方块描红边提醒。</summary>
+    public bool IsDuplicate
+    {
+        get => _duplicate;
+        set
+        {
+            if (!Set(ref _duplicate, value)) return;
+            Raise(nameof(BlockBorderBrush));
+            Raise(nameof(BlockBorderThickness));
+        }
+    }
+
+    private bool _addBlock;
+    /// <summary>这个方块是「+ 加一条」。</summary>
+    public bool IsAddBlock
+    {
+        get => _addBlock;
+        set
+        {
+            if (!Set(ref _addBlock, value)) return;
+            Raise(nameof(IsRowBlock));
+        }
+    }
+
+    /// <summary>这个方块是一条绑定。</summary>
+    public bool IsRowBlock => !_addBlock;
+
+    /// <summary>方块描边：等待按键 → 品牌绿加粗；重复绑定 → 红边；平时 → 一像素灰边。</summary>
+    public IBrush? BlockBorderBrush =>
+        Waiting ? FindBrush("BrushAccent")
+        : IsDuplicate ? FindBrush("BrushDanger")
+        : FindBrush("BrushBorderStrong");
+
+    /// <summary>方块描边粗细。等待态加粗一档。</summary>
+    public Thickness BlockBorderThickness =>
+        Waiting ? new Thickness(2) : IsDuplicate ? new Thickness(1.5) : new Thickness(1);
+
+    protected override void OnSet(string? name)
+    {
+        base.OnSet(name);
+        if (name == nameof(Waiting))
+        {
+            Raise(nameof(BlockBorderBrush));
+            Raise(nameof(BlockBorderThickness));
+        }
+    }
 }
 
 /// <summary>一行功能键。</summary>
