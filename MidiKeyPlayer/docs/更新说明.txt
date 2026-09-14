@@ -1,0 +1,26 @@
+MIDI 按键播放器 v1.0.0
+
+【本版】
+新建仓库。功能与原来的按键播放器一致。
+程序名、程序集名、命名空间、设置与日志目录全部改为中性命名。
+
+【功能】
+- 导入 MIDI（.mid / .midi / .kar / .rmi），点一行作为主旋律。
+- 卷帘编辑器：标尺 / 琴键栏 / 多选 / 框选 / 两端改长度 / 撤销重做 / 导出 MIDI。
+- 试听：Windows 自带的 MIDI 合成器。
+- 输入兼容三档：稳健 / 标准 / 极限。
+- 导出按键表：G HUB 脚本（.lua）或通用 CSV。
+- MIDI 设备实时演奏。
+- 全局热键：F6 开始 / 暂停 / 继续，F5 后退 5 秒，F7 前进 5 秒。
+
+【配置】
+- 设置：%LOCALAPPDATA%\MidiKeyPlayer\settings.json
+- 日志：%LOCALAPPDATA%\MidiKeyPlayer\play.log
+
+【计划中】
+- 键位方案配置与导入导出。
+- 和弦开关。
+- 声轨颜色。
+
+【链接】
+https://github.com/<你的账号>/midikey-player

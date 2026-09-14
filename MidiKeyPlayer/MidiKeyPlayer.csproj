@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>MidiKeyPlayer</RootNamespace>
+    <AssemblyName>MidiKeyPlayer</AssemblyName>
+    <Version>1.0.0</Version>
+    <Company>MidiKeyPlayer</Company>
+    <Product>MIDI 按键播放器</Product>
+    <Description>导入 MIDI，把音符映射成键盘按键输出（Windows）</Description>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.3.20" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.20" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.20" />
+    <PackageReference Include="Melanchall.DryWetMidi" Version="7.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\app.ico" />
+  </ItemGroup>
+
+</Project>

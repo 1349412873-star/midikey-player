@@ -1,0 +1,113 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- ==================== 卡片：圆角 + 轻投影靠阴影分块（原版白底 1px 边没层次） ==================== -->
+  <Style Selector="Border.card">
+    <Setter Property="Background" Value="{DynamicResource BrushSurface}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BrushBorder}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{DynamicResource RadiusCard}" />
+    <Setter Property="Padding" Value="{DynamicResource CardPadding}" />
+    <Setter Property="BoxShadow" Value="0 1 2 0 #0F0F1729" />
+  </Style>
+
+  <!-- ==================== 按钮 ====================
+       Avalonia 11 把按钮底色画在 PART_ContentPresenter 上：四个状态都要覆盖，否则悬停跳回 Fluent 灰。 -->
+
+  <Style Selector="Button.accent">
+    <Setter Property="Foreground" Value="{DynamicResource BrushOnAccent}" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="CornerRadius" Value="{DynamicResource RadiusControl}" />
+  </Style>
+  <Style Selector="Button.accent /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource BrushAccent}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BrushAccent}" />
+  </Style>
+  <Style Selector="Button.accent:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource BrushAccentHover}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BrushAccentHover}" />
+  </Style>
+  <Style Selector="Button.accent:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource BrushAccentPressed}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BrushAccentPressed}" />
+  </Style>
+  <Style Selector="Button.accent:disabled">
+    <Setter Property="Foreground" Value="#F2F7F4" />
+  </Style>
+  <Style Selector="Button.accent:disabled /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource BrushAccentDisabled}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BrushAccentDisabled}" />
+  </Style>
+
+  <Style Selector="Button.secondary">
+    <Setter Property="CornerRadius" Value="{DynamicResource RadiusControl}" />
+    <Setter Property="Foreground" Value="{DynamicResource BrushText}" />
+  </Style>
+  <Style Selector="Button.secondary /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource BrushSurface}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BrushBorderStrong}" />
+  </Style>
+  <Style Selector="Button.secondary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource BrushSurfaceAlt}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BrushAccent}" />
+  </Style>
+  <Style Selector="Button.secondary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource BrushAccentSoft}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BrushAccent}" />
+  </Style>
+  <Style Selector="Button.secondary:disabled /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="#F3F5F8" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BrushBorder}" />
+  </Style>
+  <Style Selector="Button.secondary:disabled">
+    <Setter Property="Foreground" Value="{DynamicResource BrushTextMuted}" />
+  </Style>
+
+  <!-- ==================== 文字角色 ==================== -->
+  <Style Selector="TextBlock.sectionLabel">
+    <Setter Property="FontSize" Value="{DynamicResource FontCaption}" />
+    <Setter Property="Foreground" Value="{DynamicResource BrushTextMuted}" />
+  </Style>
+  <Style Selector="TextBlock.caption">
+    <Setter Property="FontSize" Value="{DynamicResource FontSmall}" />
+    <Setter Property="Foreground" Value="{DynamicResource BrushTextSecondary}" />
+  </Style>
+  <Style Selector="TextBlock.label">
+    <Setter Property="FontSize" Value="{DynamicResource FontBody}" />
+    <Setter Property="Foreground" Value="{DynamicResource BrushText}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <Style Selector="TextBlock.value">
+    <Setter Property="FontSize" Value="{DynamicResource FontSmall}" />
+    <Setter Property="Foreground" Value="{DynamicResource BrushTextSecondary}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <!-- ==================== 轨道列表 ==================== -->
+  <!-- 列头做成下沉条，与数据行区分 -->
+  <Style Selector="Border.tableHead">
+    <Setter Property="Background" Value="{DynamicResource BrushSurfaceSunken}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BrushBorder}" />
+    <Setter Property="BorderThickness" Value="0,0,0,1" />
+    <Setter Property="Padding" Value="0,2" />
+  </Style>
+  <Style Selector="ListBox#TrackList ListBoxItem">
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+  </Style>
+  <Style Selector="ListBox#TrackList ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource BrushAccentSoft}" />
+  </Style>
+  <Style Selector="ListBox#TrackList ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource BrushAccentSoft}" />
+  </Style>
+
+  <!-- ==================== 日志 ==================== -->
+  <Style Selector="ListBox#LogList">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="FontFamily" Value="{DynamicResource FontMono}" />
+    <Setter Property="FontSize" Value="{DynamicResource FontCaption}" />
+    <Setter Property="Foreground" Value="{DynamicResource BrushTextSecondary}" />
+  </Style>
+
+</Styles>
