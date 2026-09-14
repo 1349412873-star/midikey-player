@@ -1712,6 +1712,14 @@ public partial class MainWindow : Window
             int idx = (KeymapCombo.ItemsSource as List<string>)?.IndexOf(_keymap.Name) ?? -1;
             if (idx >= 0 && KeymapCombo.SelectedIndex != idx) KeymapCombo.SelectedIndex = idx;
 
+            // 预览图上的修饰键符号说明：名字跟着当前方案的功能键走，否则符号看不出含义
+            if (TxtPreviewMods != null)
+            {
+                TxtPreviewMods.Text = "符号：↑ " + PreviewKeyName(_keymap.OctaveUp)
+                                      + "　↓ " + PreviewKeyName(_keymap.OctaveDown)
+                                      + "　# " + PreviewKeyName(_keymap.Sharp);
+            }
+
             KeymapPreview.SetProfile(_keymap);
         }
         finally
@@ -1719,6 +1727,10 @@ public partial class MainWindow : Window
             _keymapLoading = false;
         }
     }
+
+    /// <summary>预览图符号说明里用的功能键名；没设置就写「未设置」。</summary>
+    private static string PreviewKeyName(string? key) =>
+        string.IsNullOrEmpty(key) ? "未设置" : DisplayKey(key!);
 
     /// <summary>键名在按钮上的显示：null/空 = 未设置，逗号写成全角逗号。</summary>
     private static string KeyDisplayName(string? key) =>
