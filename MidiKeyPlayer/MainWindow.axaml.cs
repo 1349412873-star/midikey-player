@@ -1084,8 +1084,9 @@ public partial class MainWindow : Window
         double bestScore = double.MinValue;
         foreach (var r in _tracks)
         {
-            if (!r.IsPlayable) continue;
             double s = ScoreCandidate(r);
+            // 有旋律轨可选时不要自动推荐鼓：鼓可以手选，但不该抢默认位。
+            if (r.IsPercussion) s -= 1000;
             if (s > bestScore)
             {
                 bestScore = s;
@@ -1202,7 +1203,7 @@ public partial class MainWindow : Window
     /// <summary>本轨在这次演奏里的声部序号；-1 = 不参与。这个号就是写进音符 Voice 的号。</summary>
     private int VoiceIndexOf(TrackRowVM row)
     {
-        if (!row.IsVoiceActive || row.IsPercussion) return -1;
+        if (!row.IsVoiceActive) return -1;
         if (row.IsMix)
         {
             int i = _mixOrder.IndexOf(row);
@@ -1231,14 +1232,15 @@ public partial class MainWindow : Window
             row.VoiceIndex = VoiceIndexOf(row);
             IBrush brush;
             double opacity = 1.0;
-            if (row.IsPercussion)
-            {
-                brush = ResourceBrush("BrushTextMuted");
-                opacity = 0.55;                       // 打击乐轨固定灰
-            }
-            else if (row.IsVoiceActive)
+            if (row.IsVoiceActive)
             {
                 brush = ResourceBrush("BrushVoice" + Music.Mod(row.VoiceIndex, PianoRoll.VoiceCount));
+            }
+            else if (row.IsPercussion)
+            {
+                // 未参与演奏的打击乐轨：灰、但不那么淡，提示这是鼓轨
+                brush = ResourceBrush("BrushTextMuted");
+                opacity = 0.55;
             }
             else
             {

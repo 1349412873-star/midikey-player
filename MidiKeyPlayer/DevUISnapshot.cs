@@ -119,14 +119,14 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// 【开发用】把左侧所有非打击乐候选按列表顺序勾进合奏：第一个勾的 = 0 号声部，
+    /// 【开发用】把左侧所有候选（含打击乐轨）按列表顺序勾进合奏：第一个勾的 = 0 号声部，
     /// 颜色号依次 0,1,2…。收尾走 <see cref="SyncMixOrder"/>，与用户手点勾选框完全同一条链路。
+    /// 打击乐轨现在也可以勾选，所以这里不再跳过它们。
     /// </summary>
     internal void MixAllPlayableTracksForDev()
     {
         foreach (var row in _tracks)
         {
-            if (row.IsPercussion) continue;
             row.IsMix = true;
             if (!_mixOrder.Contains(row)) _mixOrder.Add(row);
         }

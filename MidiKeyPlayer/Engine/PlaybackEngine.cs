@@ -121,10 +121,12 @@ public sealed class PlaybackEngine : IDisposable
         if (chordMode)
             return NoteMapper.MergeVoicesByPriority(list.Select(v => (v.Rank, v.Note)));
 
-        var kept = list.Where(v => !MelodyExtractor.IsPercussion(v.Note, "")).ToList();
+        // 只有在确实选了旋律轨时才排除打击乐。整轨都是鼓时不排除，否则会得到空谱面。
+        bool hasMelodic = list.Any(v => !MelodyExtractor.IsPercussion(v.Note, ""));
+        var kept = hasMelodic ? list.Where(v => !MelodyExtractor.IsPercussion(v.Note, "")).ToList() : list;
         var merged = NoteMapper.MergeVoicesByPriority(kept.Select(v => (v.Rank, v.Note)));
         // Extract 保留合并结果里的 Voice，所以单音线也带归属
-        return MelodyExtractor.Extract(merged, excludePercussion: true);
+        return MelodyExtractor.Extract(merged, excludePercussion: hasMelodic);
     }
 
     /// <summary>
@@ -137,9 +139,13 @@ public sealed class PlaybackEngine : IDisposable
         if (chordMode)
             return NoteMapper.MergeVoicesByPriority(list.Select(v => (v.Rank, v.Note)));
 
-        var kept = list.Where(v => !MelodyExtractor.IsPercussion(v.Note, v.TrackName)).ToList();
+        // 同上：整轨都是鼓时保留鼓点，不排除。
+        bool hasMelodic = list.Any(v => !MelodyExtractor.IsPercussion(v.Note, v.TrackName));
+        var kept = hasMelodic
+            ? list.Where(v => !MelodyExtractor.IsPercussion(v.Note, v.TrackName)).ToList()
+            : list;
         var merged = NoteMapper.MergeVoicesByPriority(kept.Select(v => (v.Rank, v.Note)));
-        return MelodyExtractor.Extract(merged, excludePercussion: true);
+        return MelodyExtractor.Extract(merged, excludePercussion: hasMelodic);
     }
 
     /// <summary>

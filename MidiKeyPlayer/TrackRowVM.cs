@@ -89,8 +89,11 @@ public sealed class TrackRowVM : INotifyPropertyChanged
         Candidate.Name.Contains("drum", StringComparison.OrdinalIgnoreCase) ||
         Candidate.Name.Contains("percussion", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>能否选作主旋律（打击乐整行禁用）。</summary>
-    public bool IsPlayable => !IsPercussion;
+    /// <summary>
+    /// 能否选作主旋律。打击乐轨也可以选：有的目标乐器自带鼓组，
+    /// 这种时候鼓点就该被当成正常声部发出去。
+    /// </summary>
+    public bool IsPlayable => true;
 
     /// <summary>载入时被自动推荐为主旋律轨。</summary>
     public bool IsRecommended
