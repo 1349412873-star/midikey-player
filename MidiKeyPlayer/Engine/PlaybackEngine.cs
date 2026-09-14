@@ -112,7 +112,8 @@ public sealed class PlaybackEngine : IDisposable
     /// 按和弦开关把多声部原始音符定成一条谱面（未移调、未映射），顺序固定：原始音 → 提取 → 移调 → Map。
     /// true：走 <see cref="NoteMapper.MergeVoicesByPriority"/>，即旧行为。
     /// false：先排除打击乐（通道 10），合并声部后跑 <see cref="MelodyExtractor.Extract"/>，得到严格单音线。
-    /// Rank 越小优先级越高（合奏勾选顺序，1 最优先）。
+    /// Rank 越小优先级越高（合奏勾选顺序，0 最优先）。
+    /// 两条分支产出的每个音都带着 <see cref="RawNote.Voice"/> = Rank，卷帘靠它上色。
     /// </summary>
     public static List<RawNote> ResolveNotes(IEnumerable<(int Rank, RawNote Note)> voices, bool chordMode)
     {
@@ -122,6 +123,7 @@ public sealed class PlaybackEngine : IDisposable
 
         var kept = list.Where(v => !MelodyExtractor.IsPercussion(v.Note, "")).ToList();
         var merged = NoteMapper.MergeVoicesByPriority(kept.Select(v => (v.Rank, v.Note)));
+        // Extract 保留合并结果里的 Voice，所以单音线也带归属
         return MelodyExtractor.Extract(merged, excludePercussion: true);
     }
 

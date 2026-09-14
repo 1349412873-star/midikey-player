@@ -210,6 +210,8 @@ public static class NoteMapper
     /// <summary>
     /// 多声部合奏合成单音线：同刻多个声部一起响时只保留编号最小（Rank 最小）的声部；
     /// 低优先级音压在高优先级音尾音上 → 该段让位。
+    /// 输出的每个音都写上 <see cref="RawNote.Voice"/> = 它的 Rank（声部序号），
+    /// 这样卷帘才知道「这个音属于哪条声轨」，不必再按音高猜。
     /// </summary>
     public static List<RawNote> MergeVoicesByPriority(IEnumerable<(int Rank, RawNote Note)> voices)
     {
@@ -247,7 +249,8 @@ public static class NoteMapper
                         Start = best.Note.End,          // 主声部结束后才轮到它
                         End = o.Note.End,
                         Velocity = o.Note.Velocity,
-                        Channel = o.Note.Channel        // 打击乐判定要用声道，不能丢
+                        Channel = o.Note.Channel,       // 打击乐判定要用声道，不能丢
+                        Voice = o.Rank                  // 补的尾巴段仍然属于它自己那条声轨
                     }));
                 }
             }
@@ -271,18 +274,30 @@ public static class NoteMapper
                         Start = lastNote.End,
                         End = c.Note.End,
                         Velocity = c.Note.Velocity,
-                        Channel = c.Note.Channel
+                        Channel = c.Note.Channel,
+                        Voice = c.Rank
                     });
                 }
                 continue;
             }
-            result.Add(c.Note);
+            result.Add(WithVoice(c.Note, c.Rank));
             lastNote = c.Note;
             lastRank = c.Rank;
         }
 
         return result.OrderBy(n => n.Start).ToList();
     }
+
+    /// <summary>复制一个音并写上声部序号。RawNote.Voice 是 init，只能复制，不能就地改。</summary>
+    private static RawNote WithVoice(RawNote n, int voice) => new()
+    {
+        Pitch = n.Pitch,
+        Start = n.Start,
+        End = n.End,
+        Velocity = n.Velocity,
+        Channel = n.Channel,
+        Voice = voice,
+    };
 
     /// <summary>
     /// 整体平移旋律，使首音从 0 秒开始（音间相对时值不变）；很多 MIDI 开头有几小节休止，剪掉后点播放立刻出音。
@@ -300,7 +315,8 @@ public static class NoteMapper
             Start = Math.Max(0, n.Start - first),
             End = Math.Max(0, n.End - first),
             Velocity = n.Velocity,
-            Channel = n.Channel
+            Channel = n.Channel,
+            Voice = n.Voice        // 整体平移不改归属，声轨号必须一起带过去
         }).ToList();
     }
 

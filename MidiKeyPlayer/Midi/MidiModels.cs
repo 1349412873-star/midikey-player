@@ -10,6 +10,12 @@ public sealed class RawNote
     /// <summary>MIDI 通道 0..15（9 = 通道 10 = 打击乐）；-1 = 未知。单音提取用它排除打击乐。</summary>
     public int Channel { get; init; } = -1;
 
+    /// <summary>
+    /// 这个音属于哪条声轨（合奏时的声部序号，0 起）；-1 = 未标注。
+    /// 让音符自己携带归属，卷帘才能按声轨上色，而不是按音高猜。
+    /// </summary>
+    public int Voice { get; init; } = -1;
+
     public override string ToString() => $"{Music.NoteName(Pitch)} {Start:F2}s~{End:F2}s";
 }
 

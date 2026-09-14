@@ -61,6 +61,7 @@ public static class MelodyExtractor
     /// <summary>
     /// 提取单音线。excludePercussion 为 true 时先排除打击乐（通道 10）。
     /// 输出按 Start 升序、区间互不重叠；<see cref="RawNote.Channel"/> 一律写 -1（线内已混合来源）。
+    /// <see cref="RawNote.Voice"/> 原样保留输入的声轨号：留下的音属于哪条声轨，卷帘就按它上色。
     /// </summary>
     public static List<RawNote> Extract(IReadOnlyList<RawNote> notes, bool excludePercussion = true)
     {
@@ -90,6 +91,7 @@ public static class MelodyExtractor
         double curStart = 0;              // 当前音的谱面起始
         double curEnd = 0;                // 当前音的结束（可被「延长」推后）
         int curVel = 0;
+        int curVoice = -1;                // 当前音来自哪条声轨；「保持」时段由它延续
 
         int i = 0;
         while (i < src.Count)
@@ -134,7 +136,7 @@ public static class MelodyExtractor
             if (cur >= 0 && pick.Pitch == cur && groupStart - curStart < GAP)
             {
                 // 同音高、起音离得太近：是同一个按键的重复触发（未量化 MIDI 把一个音切成两次），
-                // 并成一个音，不重新按下。真正的重复音（起音间隔 ≥ GAP）会走下面的新音分支。
+                // 并成一个音，不重新按下。归属保持先出现那个：并进来的是同一次按键。
                 if (pick.End > curEnd) curEnd = pick.End;
                 i = j + 1;
                 continue;
@@ -142,15 +144,16 @@ public static class MelodyExtractor
 
             // 新音开始前，把上一音的 End 截到本音的 Start：区间不重叠，且被「保持」的那一段
             // （本组候选没过门时不再另起新音）由这里连起来，旋律线不会出现空洞。
-            if (cur >= 0) line.Add(new Draft(cur, curStart, groupStart, curVel));
+            if (cur >= 0) line.Add(new Draft(cur, curStart, groupStart, curVel, curVoice));
 
             cur = pick.Pitch;
             curStart = groupStart;
             curEnd = Math.Max(pick.End, groupStart);
             curVel = pick.Velocity;
+            curVoice = pick.Voice;
             i = j + 1;
         }
-        if (cur >= 0 && curEnd > curStart) line.Add(new Draft(cur, curStart, curEnd, curVel));
+        if (cur >= 0 && curEnd > curStart) line.Add(new Draft(cur, curStart, curEnd, curVel, curVoice));
 
         // —— 同音高起音间隔小于 GAP 的合并 → 丢短音 → 再合并一次 ——
         // 用「起音间隔」而不是「尾音到起音的空隙」：连奏的重复音（前音 End = 后音 Start）
@@ -174,13 +177,17 @@ public static class MelodyExtractor
                 Start = d.Start,
                 End = d.End,
                 Velocity = d.Velocity,
-                Channel = -1
+                Channel = -1,
+                Voice = d.Voice
             });
         }
         return result;
     }
 
-    /// <summary>相邻同音高、起音间隔小于 <see cref="GAP"/> 的并成一个音（End 取较晚者，力度取较大者）。</summary>
+    /// <summary>
+    /// 相邻同音高、起音间隔小于 <see cref="GAP"/> 的并成一个音（End 取较晚者，力度取较大者）。
+    /// 声轨号取先出现那个的：并进来的是同一次按键，归属不该被后一个改掉。
+    /// </summary>
     private static List<Draft> MergeSamePitch(List<Draft> line)
     {
         var merged = new List<Draft>(line.Count);
@@ -197,7 +204,7 @@ public static class MelodyExtractor
                     continue;
                 }
             }
-            merged.Add(new Draft(d.Pitch, d.Start, d.End, d.Velocity));
+            merged.Add(new Draft(d.Pitch, d.Start, d.End, d.Velocity, d.Voice));
         }
         return merged;
     }
@@ -209,13 +216,15 @@ public static class MelodyExtractor
         public double Start;
         public double End;
         public int Velocity;
+        public int Voice;
 
-        public Draft(int pitch, double start, double end, int velocity)
+        public Draft(int pitch, double start, double end, int velocity, int voice)
         {
             Pitch = pitch;
             Start = start;
             End = end;
             Velocity = velocity;
+            Voice = voice;
         }
     }
 

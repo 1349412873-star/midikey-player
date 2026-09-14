@@ -1031,43 +1031,57 @@ public partial class MainWindow : Window
             var path = files[0].TryGetLocalPath();
             if (string.IsNullOrEmpty(path)) return;
 
-            // 暂停/播放中也能换歌：先停掉当前播放，避免新旧串曲
-            StopPlaybackForNewFile();
-
-            try
-            {
-                var parsed = MidiLoader.Parse(path);
-                _parsed = parsed;
-                _tracks.Clear();
-                _mixOrder.Clear();
-                foreach (var c in parsed.Candidates) _tracks.Add(new TrackRowVM(c));
-
-                LblFile.Text = System.IO.Path.GetFileName(path);
-                InsertLog($"已载入 {System.IO.Path.GetFileName(path)}：{parsed.Candidates.Count} 个候选，时长 ≈ {parsed.DurationSec:F1}s");
-
-                _selected = null;
-                _previewSeconds = 0;      // 换歌必须回到 0，否则上一首的位置会夹到新曲末尾 → 一播放就结束
-                Roll.FitAll();
-                ResetEdits();
-                ChooseRecommendedTrack();
-                RefreshPreview();
-            }
-            catch (Exception ex)
-            {
-                var parts = new List<string>();
-                Exception? inner = ex;
-                while (inner != null)
-                {
-                    parts.Add($"{inner.GetType().Name}: {inner.Message}");
-                    inner = inner.InnerException;
-                }
-                InsertLog($"载入失败：{path}");
-                InsertLog($"  原因：{string.Join("  <-  ", parts)}（错误码 0x{ex.HResult:X8}）");
-            }
+            LoadMidiFile(path);
         }
         catch (Exception ex)
         {
             InsertLog($"打开文件对话框失败：{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 载入一个 MIDI 文件并刷新界面。打开按钮与开发快照（DevUISnapshot）共用这一条链路，
+    /// 所以截图看到的就是用户点「打开 MIDI 文件」后的真实状态。
+    /// 返回 true = 载入成功；失败原因写进日志。
+    /// </summary>
+    internal bool LoadMidiFile(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return false;
+
+        // 暂停/播放中也能换歌：先停掉当前播放，避免新旧串曲
+        StopPlaybackForNewFile();
+
+        try
+        {
+            var parsed = MidiLoader.Parse(path);
+            _parsed = parsed;
+            _tracks.Clear();
+            _mixOrder.Clear();
+            foreach (var c in parsed.Candidates) _tracks.Add(new TrackRowVM(c));
+
+            LblFile.Text = System.IO.Path.GetFileName(path);
+            InsertLog($"已载入 {System.IO.Path.GetFileName(path)}：{parsed.Candidates.Count} 个候选，时长 ≈ {parsed.DurationSec:F1}s");
+
+            _selected = null;
+            _previewSeconds = 0;      // 换歌必须回到 0，否则上一首的位置会夹到新曲末尾 → 一播放就结束
+            Roll.FitAll();
+            ResetEdits();
+            ChooseRecommendedTrack();
+            RefreshPreview();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            var parts = new List<string>();
+            Exception? inner = ex;
+            while (inner != null)
+            {
+                parts.Add($"{inner.GetType().Name}: {inner.Message}");
+                inner = inner.InnerException;
+            }
+            InsertLog($"载入失败：{path}");
+            InsertLog($"  原因：{string.Join("  <-  ", parts)}（错误码 0x{ex.HResult:X8}）");
+            return false;
         }
     }
 
@@ -1198,10 +1212,12 @@ public partial class MainWindow : Window
     // ================= 声轨颜色一一对应 =================
     //
     // 颜色号 = 该轨在这次演奏里的声部序号：勾了「合」按勾选顺序 0 起，否则主旋律轨 = 0。
-    // 左侧列表的文字用它上色，卷帘的音符也用它上色，所以两边一一对应。
+    // 左侧列表的文字用它上色；同一个号在合奏合并时写进每个音符的 RawNote.Voice，
+    // 卷帘就按音符自带的号上色（PianoRoll.VoiceOfNote）——所以哪怕两条声轨共用同一个音高，
+    // 两边的颜色也各归各的，不看音高猜。
     // 色值只来自 Styles\Theme.axaml 的 BrushVoice0..11；未参与合奏降不透明度，打击乐轨用灰。
 
-    /// <summary>本轨在这次演奏里的声部序号；-1 = 不参与。</summary>
+    /// <summary>本轨在这次演奏里的声部序号；-1 = 不参与。这个号就是写进音符 Voice 的号。</summary>
     private int VoiceIndexOf(TrackRowVM row)
     {
         if (!row.IsVoiceActive || row.IsPercussion) return -1;
@@ -1222,7 +1238,7 @@ public partial class MainWindow : Window
 
         ApplyVoiceBrushes();
 
-        // 卷帘按「音高 → 声部序号」上色，与左侧列表同一个序号
+        // 卷帘：每个音自带 Voice（合奏时写死），这里只补一份「音高 → 声部」兜底表给手加的音
         Roll.SetVoiceColors(BuildVoiceMap(GetActiveRawNotes()));
     }
 
@@ -1244,8 +1260,10 @@ public partial class MainWindow : Window
             }
             else
             {
-                brush = ResourceBrush("BrushVoice" + Music.Mod(row.VoiceIndex, PianoRoll.VoiceCount));
-                opacity = 0.45;                       // 未参与合奏：降低不透明度
+                // 未参与合奏：不用调色板颜色（VoiceIndex 可能是 -1，取模会绕到 11 号色），
+                // 统一用弱化灰，和打击乐轨区分在文字色深浅上。
+                brush = ResourceBrush("BrushTextMuted");
+                opacity = 0.45;
             }
             if (brush is SolidColorBrush scb)
                 brush = new SolidColorBrush(scb.Color, opacity);
@@ -1262,40 +1280,20 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 音高 → 声部序号。同一音高归序号最小的声部（与合奏时「让位给编号小的声部」一致）。
-    /// 单音线（和弦开关关闭）只保留一条线，序号一律 0。
+    /// 【兜底映射】音高 → 声部序号。只在音符自己没有归属（Voice &lt; 0，例如用户手加的音）时才用：
+    /// 主路径是音符自带的 <see cref="RawNote.Voice"/>（见 <see cref="PianoRoll.VoiceOfNote"/>）。
+    /// 同一音高归序号最小的声部（与合奏时「让位给编号小的声部」一致）。
+    /// 序号口径与 <see cref="VoiceIndexOf"/> 相同：0 起。
     /// </summary>
     private Dictionary<int, int> BuildVoiceMap(IReadOnlyList<RawNote> kept)
     {
         var map = new Dictionary<int, int>();
-        if (kept.Count == 0) return map;
-
-        var keep = new HashSet<RawNote>(kept);
-        var rows = ActiveRows();
-        if (rows.Count == 0) return map;
-
-        if (rows.Count == 1)
+        for (int i = 0; i < kept.Count; i++)
         {
-            foreach (var n in rows[0].Candidate.Notes)
-                if (keep.Contains(n) && !map.ContainsKey(n.Pitch)) map[n.Pitch] = 0;
-            return map;
-        }
-
-        if (!_chordOn)
-        {
-            // 提取后的单音线：整条都算 0 号色
-            foreach (var n in kept) map[n.Pitch] = 0;
-            return map;
-        }
-
-        for (int i = 0; i < rows.Count; i++)
-        {
-            foreach (var n in rows[i].Candidate.Notes)
-            {
-                if (!keep.Contains(n)) continue;
-                if (map.TryGetValue(n.Pitch, out int old) && old <= i) continue;
-                map[n.Pitch] = i;
-            }
+            var n = kept[i];
+            int v = n.Voice >= 0 ? n.Voice : 0;
+            if (map.TryGetValue(n.Pitch, out int old) && old <= v) continue;
+            map[n.Pitch] = v;
         }
         return map;
     }
@@ -1326,8 +1324,10 @@ public partial class MainWindow : Window
         if (_chordOn)
         {
             var voices = new List<(int Rank, RawNote Note)>();
+            // Rank 就是声部序号（0 起），必须与左侧列表的 VoiceIndexOf 同口径：
+            // 音符写进 Voice 后，卷帘的颜色号就等于这里给的行号。
             for (int k = 0; k < rows.Count; k++)
-                foreach (var n in rows[k].Candidate.Notes) voices.Add((k + 1, n));  // 1 最优先
+                foreach (var n in rows[k].Candidate.Notes) voices.Add((k, n));  // 0 最优先
             merged = NoteMapper.MergeVoicesByPriority(voices);
         }
         else
@@ -1335,7 +1335,7 @@ public partial class MainWindow : Window
             // 先按合奏顺序合并多轨，再抽一条平滑 skyline 单音线；打击乐按通道与轨道名一起排除
             var voices = new List<(int Rank, string TrackName, RawNote Note)>();
             for (int k = 0; k < rows.Count; k++)
-                foreach (var n in rows[k].Candidate.Notes) voices.Add((k + 1, rows[k].Name, n));
+                foreach (var n in rows[k].Candidate.Notes) voices.Add((k, rows[k].Name, n));
             if (voices.Count == 0) return new List<RawNote>();
             merged = PlaybackEngine.ResolveNotes(voices, chordMode: false);
         }
@@ -1484,6 +1484,15 @@ public partial class MainWindow : Window
                 _mixOrder.Remove(row);
             }
         }
+        SyncMixOrder();
+    }
+
+    /// <summary>
+    /// 勾选集合变化后的统一收尾：补正 _mixOrder、重排优先级编号、刷新声轨颜色与谱面。
+    /// 勾选框事件与开发快照（DevUISnapshot 的 MIX=all）都走这里，行为完全一致。
+    /// </summary>
+    internal void SyncMixOrder()
+    {
         // 兜底同步 IsMix 状态
         foreach (var r in _tracks)
             if (r.IsMix && !_mixOrder.Contains(r)) _mixOrder.Add(r);

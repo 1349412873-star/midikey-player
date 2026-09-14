@@ -313,10 +313,118 @@ public sealed class KeymapProfile
         return null;
     }
 
+    // ================= 方案库（内置 + 用户自己存的文件） =================
+
+    /// <summary>
+    /// 用户方案文件所在目录：%LOCALAPPDATA%\MidiKeyPlayer\schemes\。
+    /// 一个方案一个文件，文件名（去掉扩展名）= 方案名。
+    /// </summary>
+    public static string SchemesDir =>
+        Path.Combine(DirPath, "schemes");
+
+    /// <summary>某个方案名对应的文件路径。名字里的非法字符换成下划线。</summary>
+    public static string SchemeFilePath(string? name)
+    {
+        string safe = (name ?? "").Trim();
+        foreach (char bad in Path.GetInvalidFileNameChars()) safe = safe.Replace(bad, '_');
+        if (safe.Length == 0) safe = "未命名方案";
+        return Path.Combine(SchemesDir, safe + ".json");
+    }
+
+    /// <summary>schemes 目录下已有的方案文件名（不含扩展名）。目录不在或读不动就返回空。</summary>
+    private static List<string> SchemeFiles()
+    {
+        var list = new List<string>();
+        try
+        {
+            if (!Directory.Exists(SchemesDir)) return list;
+            foreach (var path in Directory.GetFiles(SchemesDir, "*.json"))
+            {
+                string name = Path.GetFileNameWithoutExtension(path);
+                if (!string.IsNullOrWhiteSpace(name)) list.Add(name);
+            }
+        }
+        catch (Exception ex)
+        {
+            LogFile.Append("[键位] 列 schemes 方案文件失败：" + ex.Message);
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// 全部可用方案名：内置 6 套在前（按 Presets 的顺序），用户方案文件在后（按名字排序）。
+    /// 名字相同的只留一次。下拉框直接用这个列表。
+    /// </summary>
+    public static IReadOnlyList<string> ListSchemeNames()
+    {
+        var names = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var p in Presets)
+            if (!string.IsNullOrWhiteSpace(p.Name) && seen.Add(p.Name)) names.Add(p.Name);
+
+        var files = SchemeFiles();
+        files.Sort(StringComparer.Ordinal);
+        foreach (string f in files)
+            if (seen.Add(f)) names.Add(f);
+
+        return names;
+    }
+
+    /// <summary>这个名字是不是内置预设。内置方案不能删除、不能重命名、不能被覆盖。</summary>
+    public static bool IsBuiltInSchemeName(string? name) => PresetByName(name) != null;
+
+    /// <summary>这个名字已经被某个方案占用（内置或用户文件）。</summary>
+    public static bool SchemeNameExists(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        if (IsBuiltInSchemeName(name)) return true;
+        try
+        {
+            return File.Exists(SchemeFilePath(name));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 按名字载入一个方案。内置名走内置预设，其余读 schemes\&lt;名字&gt;.json。
+    /// 文件不在或读不动返回 null，并写出可读原因。绝不抛异常。
+    /// </summary>
+    public static KeymapProfile? LoadByName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return null;
+
+        var preset = PresetByName(name);
+        if (preset != null) return preset.Clone();
+
+        string path = SchemeFilePath(name);
+        try
+        {
+            if (!File.Exists(path))
+            {
+                LogFile.Append($"[键位] 没有方案文件：{path}");
+                return null;
+            }
+            return FromJson(File.ReadAllText(path));
+        }
+        catch (KeymapFormatException ex)
+        {
+            LogFile.Append($"[键位] 方案文件格式不对（{path}）：{ex.Message}");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            LogFile.Append($"[键位] 读方案文件失败（{path}）：{ex.Message}");
+            return null;
+        }
+    }
+
     // ================= 读盘 / 写盘 =================
 
     /// <summary>
-    /// 读活动方案。顺序：keymap.json → 设置里记的方案名对应的内置预设 → 默认方案。
+    /// 读活动方案。顺序：keymap.json → 设置里记的方案名（用户文件，再内置预设）→ 默认方案。
     /// 任何失败都只写日志，返回默认方案的副本，绝不抛异常。
     /// </summary>
     public static KeymapProfile Load()
@@ -337,11 +445,15 @@ public sealed class KeymapProfile
 
         try
         {
-            var preset = PresetByName(AppConfig.Load().KeymapName);
-            if (preset != null)
+            string want = AppConfig.Load().KeymapName;
+            if (!string.IsNullOrWhiteSpace(want))
             {
-                LogFile.Append($"[键位] 按设置载入内置方案：{preset.Name}");
-                return preset.Clone();
+                var byName = LoadByName(want);
+                if (byName != null)
+                {
+                    LogFile.Append($"[键位] 按设置载入方案：{byName.Name}");
+                    return byName;
+                }
             }
         }
         catch (Exception ex)

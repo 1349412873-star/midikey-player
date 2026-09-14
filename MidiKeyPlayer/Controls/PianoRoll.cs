@@ -41,7 +41,10 @@ public sealed class PianoRoll : Control
 
     private List<RawNote> _notes = new();
     private HashSet<int> _inRange = new();
-    /// <summary>音高 → 声轨颜色号。一个音高只归一个颜色号；缺省（用户手加的音）算 0 号。</summary>
+    /// <summary>
+    /// 音高 → 声轨颜色号，只作兜底：音符自带 <see cref="RawNote.Voice"/> 时优先用它。
+    /// 缺省（用户手加的音）算 0 号。
+    /// </summary>
     private Dictionary<int, int> _voiceOfPitch = new();
     private double _total;
     private double _position;
@@ -133,9 +136,24 @@ public sealed class PianoRoll : Control
         return p[i];
     }
 
-    /// <summary>该音高归哪个声轨颜色号（不在表里 = 用户手加的音，算 0 号）。</summary>
+    /// <summary>音高 → 声轨颜色号（兜底用）。音符自带 Voice 时不查这里。</summary>
     private int VoiceIndexOf(int pitch) =>
         _voiceOfPitch.TryGetValue(pitch, out int v) ? v : 0;
+
+    /// <summary>
+    /// 【唯一上色口径】一个音画什么颜色号：优先用它自带的声轨归属
+    /// （<see cref="RawNote.Voice"/> ≥ 0，由合奏合并时写死）；只有没有归属的音
+    /// （用户手加的音、旧数据）才退回按音高查映射表。
+    /// 渲染与诊断报告都调它，报告里的颜色就是画面上的颜色。
+    /// </summary>
+    public int VoiceOfNote(RawNote note) =>
+        note.Voice >= 0 ? note.Voice : VoiceIndexOf(note.Pitch);
+
+    /// <summary>卷帘当前持有的音符（诊断报告用）。</summary>
+    public IReadOnlyList<RawNote> Notes => _notes;
+
+    /// <summary>该音高当前是否算「可演奏」（决定画声轨色还是画灰）。</summary>
+    public bool IsInRangePitch(int pitch) => _inRange.Contains(pitch);
 
     private static readonly IBrush SkipBrush = new SolidColorBrush(Color.Parse("#C8D0D9"));
     private static readonly IPen HoverPen = new Pen(new SolidColorBrush(Color.Parse("#8FB4E8")), 1);
@@ -215,9 +233,10 @@ public sealed class PianoRoll : Control
     }
 
     /// <summary>
-    /// 设置「音高 → 声轨颜色号」。同一音高只保留一个颜色号：高优先级（号小）的声轨胜出，
+    /// 设置「音高 → 声轨颜色号」兜底表，供没有自带 <see cref="RawNote.Voice"/> 的音（用户手加的）
+    /// 上色。同一音高只保留一个颜色号：序号小（优先级高）的声轨胜出，
     /// 与合奏时"冲突让位给编号小的声部"一致。缺省音高算 0 号。
-    /// 卷帘按这份表上色，所以卷帘里的颜色和左侧列表的声轨颜色一一对应。
+    /// 有归属的音不查这张表，见 <see cref="VoiceOfNote"/>。
     /// </summary>
     public void SetVoiceColors(IReadOnlyDictionary<int, int>? pitchToVoice)
     {
@@ -526,7 +545,7 @@ public sealed class PianoRoll : Control
                 skip.Children.Add(new RectangleGeometry(rect));
                 continue;
             }
-            int voice = VoiceIndexOf(n.Pitch);
+            int voice = VoiceOfNote(n);
             if (!_barsByVoice.TryGetValue(voice, out var g))
             {
                 g = new GeometryGroup();
@@ -655,7 +674,7 @@ public sealed class PianoRoll : Control
             {
                 ctx.FillRectangle(Bg, RectOf(o.Note.Pitch, o.Note.Start, o.Note.End).Inflate(2));
                 var r = RectOf(o.Pitch, o.Start, o.End);
-                ctx.FillRectangle(_inRange.Contains(o.Pitch) ? VoiceBrushOf(VoiceIndexOf(o.Pitch)) : SkipBrush, r);
+                ctx.FillRectangle(_inRange.Contains(o.Pitch) ? VoiceBrushOf(VoiceOfNote(o.Note)) : SkipBrush, r);
                 ctx.DrawRectangle(null, SelPen, r);
             }
             return;
@@ -1145,7 +1164,15 @@ public sealed class PianoRoll : Control
             {
                 if (v.Pitch != n.Pitch || Math.Abs(v.Start - n.Start) > 1e-9 || Math.Abs(v.End - n.End) > 1e-9)
                     anyChange = true;
-                rebuilt.Add((new RawNote { Pitch = v.Pitch, Start = v.Start, End = v.End, Velocity = n.Velocity }, true));
+                // Voice 一起带走：拖动的音仍然属于原来那条声轨，颜色不该因为改位置就变
+                rebuilt.Add((new RawNote
+                {
+                    Pitch = v.Pitch,
+                    Start = v.Start,
+                    End = v.End,
+                    Velocity = n.Velocity,
+                    Voice = n.Voice
+                }, true));
             }
             else
             {
@@ -1203,7 +1230,8 @@ public sealed class PianoRoll : Control
                 Pitch = p,
                 Start = st,
                 End = Math.Max(st + MinNoteSeconds, n.End + dt),
-                Velocity = n.Velocity
+                Velocity = n.Velocity,
+                Voice = n.Voice      // 微调不改声轨归属
             }, true));
         }
         rebuilt.Sort((a, b) => a.N.Start.CompareTo(b.N.Start));

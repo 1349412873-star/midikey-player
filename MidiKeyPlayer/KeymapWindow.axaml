@@ -1,16 +1,17 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:local="clr-namespace:MidiKeyPlayer"
         x:Class="MidiKeyPlayer.KeymapWindow"
         Title="键位设置"
-        Width="660" Height="620"
-        MinWidth="520" MinHeight="480"
+        Width="600" Height="780"
+        MinWidth="500" MinHeight="600"
         WindowStartupLocation="CenterOwner"
         Background="{DynamicResource BrushCanvas}"
-        FontFamily="{DynamicResource FontUi}">
+        FontFamily="{DynamicResource FontUi}"
+        PointerPressed="Window_PointerPressed"
+        Closed="Window_Closed">
 
   <Window.Styles>
-    <!-- 与主窗同一套文字色规则：避免系统深色/高对比主题下白字白底看不见 -->
+    <!-- 与主窗同一套文字色规则：避免系统深色 / 高对比主题下白字白底看不见 -->
     <Style Selector="Window">
       <Setter Property="Foreground" Value="{DynamicResource BrushText}"/>
     </Style>
@@ -18,9 +19,6 @@
       <Setter Property="Foreground" Value="{DynamicResource BrushText}"/>
     </Style>
     <Style Selector="Window Button">
-      <Setter Property="Foreground" Value="{DynamicResource BrushText}"/>
-    </Style>
-    <Style Selector="Window CheckBox">
       <Setter Property="Foreground" Value="{DynamicResource BrushText}"/>
     </Style>
     <Style Selector="Window TextBlock.sectionLabel">
@@ -32,184 +30,227 @@
     <Style Selector="Window TextBlock.value">
       <Setter Property="Foreground" Value="{DynamicResource BrushTextSecondary}"/>
     </Style>
+    <Style Selector="Window TextBlock.label">
+      <Setter Property="Foreground" Value="{DynamicResource BrushText}"/>
+    </Style>
+    <Style Selector="Window TextBlock.danger">
+      <Setter Property="Foreground" Value="{DynamicResource BrushDanger}"/>
+    </Style>
+    <Style Selector="Window TextBlock.link">
+      <Setter Property="Foreground" Value="{DynamicResource BrushAccent}"/>
+      <Setter Property="Cursor" Value="Hand"/>
+    </Style>
+    <!-- 音域数字框不合法时的红描边 -->
+    <Style Selector="Window TextBox.bad">
+      <Setter Property="BorderBrush" Value="{DynamicResource BrushDanger}"/>
+      <Setter Property="BorderThickness" Value="1.5"/>
+    </Style>
+    <!-- 绑定行里的下拉框压矮一点，让 8 条绑定一屏放得下 -->
+    <Style Selector="Window ComboBox.rowCombo">
+      <Setter Property="MinHeight" Value="26"/>
+      <Setter Property="Padding" Value="8,0"/>
+    </Style>
   </Window.Styles>
 
-  <!-- 窗口内一层纵向滚动：内容比窗口高时可以滚，横向不滚 -->
-  <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-    <StackPanel Margin="14" Spacing="12">
+  <!-- 下半部分：滚动内容 + 常驻统计行。横向永不滚动 -->
+  <Grid RowDefinitions="*,Auto">
 
-      <!-- ============ 方案：下拉 + 导入/导出 ============ -->
-      <Border Classes="card">
-        <Grid RowDefinitions="Auto,Auto" RowSpacing="6">
-          <WrapPanel Grid.Row="0" ItemSpacing="8" LineSpacing="6">
-            <TextBlock Text="键位方案" Classes="sectionLabel" VerticalAlignment="Center"/>
-            <ComboBox x:Name="KeymapCombo" Width="200" FontSize="{DynamicResource FontSmall}"
-                      VerticalAlignment="Center" SelectionChanged="KeymapCombo_Changed"
-                      ToolTip.Tip="内置方案与自定义方案。选内置方案后还可以在下面继续改"/>
-            <Button x:Name="BtnKeymapImport" Content="导入方案…" FontSize="{DynamicResource FontCaption}"
-                    Padding="10,3" Classes="secondary" VerticalAlignment="Center"
-                    Click="KeymapImport_Click" ToolTip.Tip="读入一个方案 JSON 文件"/>
-            <Button x:Name="BtnKeymapExport" Content="导出方案…" FontSize="{DynamicResource FontCaption}"
-                    Padding="10,3" Classes="secondary" VerticalAlignment="Center"
-                    Click="KeymapExport_Click" ToolTip.Tip="把当前方案写成 JSON 文件"/>
-          </WrapPanel>
-          <TextBlock Grid.Row="1" x:Name="TxtKeymapHint" Classes="caption" TextWrapping="Wrap"
-                     Foreground="{DynamicResource BrushInfoText}" Text=""/>
-        </Grid>
-      </Border>
+    <ScrollViewer Grid.Row="0" x:Name="MainScroll"
+                  HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+      <StackPanel Margin="14,12,14,8" Spacing="8">
 
-      <!-- ============ 键位：主键列表 + 三个功能键 + 音域与策略 ============ -->
-      <Border Classes="card">
-        <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="8">
+        <!-- ============ 1. 方案行 ============ -->
+        <Border Classes="card">
+          <StackPanel Spacing="4">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Text="方案" Classes="label" VerticalAlignment="Center"/>
+              <ComboBox x:Name="KeymapCombo" Width="190" FontSize="{DynamicResource FontSmall}"
+                        VerticalAlignment="Center" SelectionChanged="KeymapCombo_Changed"
+                        ToolTip.Tip="当前正在用的键位方案。改完自动存"/>
+              <Button Content="导入方案…" Classes="secondary" FontSize="{DynamicResource FontCaption}"
+                      Padding="8,1" VerticalAlignment="Center" Click="KeymapImport_Click"
+                      ToolTip.Tip="读入一个方案 JSON 文件"/>
+              <Button Content="导出方案…" Classes="secondary" FontSize="{DynamicResource FontCaption}"
+                      Padding="8,1" VerticalAlignment="Center" Click="KeymapExport_Click"
+                      ToolTip.Tip="把当前方案写成 JSON 文件"/>
+              <Button x:Name="BtnSchemeMenu" Content="▾" Classes="secondary"
+                      FontSize="{DynamicResource FontCaption}" Padding="6,1" MinWidth="28"
+                      VerticalAlignment="Center" ToolTip.Tip="另存为新方案、重命名、删除、恢复默认设置">
+                <Button.Flyout>
+                  <MenuFlyout Placement="BottomEdgeAlignedLeft">
+                    <MenuItem x:Name="MiSchemeSaveAs" Header="另存为新方案…" Click="SchemeSaveAs_Click"
+                              ToolTip.Tip="以当前方案为底另存一份新方案"/>
+                    <MenuItem x:Name="MiSchemeRename" Header="重命名…" Click="SchemeRename_Click"
+                              ToolTip.Tip="给这套方案换个名字"/>
+                    <MenuItem x:Name="MiSchemeDelete" Header="删除方案…" Click="SchemeDelete_Click"
+                              ToolTip.Tip="删掉这套方案，内置方案不能删"/>
+                    <Separator/>
+                    <MenuItem x:Name="MiSchemeRestore" Header="恢复默认设置…" Click="SchemeRestore_Click"
+                              ToolTip.Tip="把当前方案的键位改回初始键位。不影响你的其他方案"/>
+                  </MenuFlyout>
+                </Button.Flyout>
+              </Button>
+            </StackPanel>
+            <TextBlock x:Name="TxtSchemeHint" Classes="caption" TextWrapping="Wrap"
+                       Foreground="{DynamicResource BrushInfoText}" Text=""/>
+          </StackPanel>
+        </Border>
 
-          <TextBlock Grid.Row="0" Grid.Column="0" Text="主键（点键帽，再按一个键即可改）"
-                     Classes="sectionLabel" TextWrapping="Wrap"/>
+        <!-- ============ 2. 按键绑定 ============ -->
+        <Border Classes="card">
+          <StackPanel Spacing="6">
+            <TextBlock Text="按键绑定" Classes="sectionLabel" FontWeight="SemiBold"/>
 
-          <!-- 主键列表：按内容自然展开（只给一个很高的上限兜底，不裁切）。
-               默认方案 8 条在这个宽度下一行 4 条、两行全露；绑定再多也只会把窗口内容顶高，
-               由窗口自己的纵向滚动条承接，绝不会出现「有绑定但看不见」。
-               外面的滚动条仍然保留：万一窗口被拉得很窄，列表仍可滚。 -->
-          <Grid Grid.Row="1" Grid.Column="0" RowDefinitions="Auto,Auto" RowSpacing="4">
-            <ScrollViewer Grid.Row="0" x:Name="KeyListScroll" MinHeight="60" MaxHeight="240"
-                          HorizontalScrollBarVisibility="Disabled"
+            <TextBlock x:Name="TxtBindEmpty" Classes="caption" Margin="0,8"
+                       HorizontalAlignment="Center" IsVisible="{Binding ShowEmptyHint}"
+                       Text="还没绑任何键。点下面的『加一条』开始。"/>
+
+            <!-- 绑定再多也不把音域卡片顶出屏幕：列表自己滚。默认 8 条要能全露出来 -->
+            <ScrollViewer x:Name="BindListScroll" MaxHeight="320" HorizontalScrollBarVisibility="Disabled"
                           VerticalScrollBarVisibility="Auto">
-              <ItemsControl x:Name="KeyList">
-                <ItemsControl.ItemsPanel>
-                  <ItemsPanelTemplate>
-                    <WrapPanel ItemSpacing="3" LineSpacing="4"/>
-                  </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-                <ItemsControl.ItemTemplate>
-                  <DataTemplate>
-                    <StackPanel Orientation="Horizontal" Spacing="2">
-                      <Button Content="{Binding Key}" FontSize="{DynamicResource FontMicro}"
-                              Padding="0" Classes="secondary" Width="30"
-                              HorizontalContentAlignment="Center" Click="KeyBind_Click"
-                              ToolTip.Tip="点一下，再按一个新键，就把这个音改到新键"/>
-                      <TextBox Text="{Binding Offset}" Width="30"
-                               FontSize="{DynamicResource FontMicro}" Padding="2,2"
-                               VerticalContentAlignment="Center"
-                               ToolTip.Tip="相对基准音的半音偏移"/>
-                      <Button Content="✕" FontSize="{DynamicResource FontMicro}"
-                              Padding="0" Classes="secondary" Width="20"
-                              HorizontalContentAlignment="Center" Click="KeyRemove_Click"
-                              ToolTip.Tip="删除这一键"/>
-                    </StackPanel>
-                  </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
+            <ItemsControl x:Name="BindRows" HorizontalAlignment="Left">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <!-- 第 0 行三格：音高 / 键 / 删除；第 1 行只放重复绑定提示。
+                       整行靠左，不拉伸：删除按钮紧挨键按钮，提示紧跟在删除按钮右侧。 -->
+                  <Grid ColumnDefinitions="Auto,Auto,Auto,Auto" RowDefinitions="Auto,Auto"
+                        Margin="0,1" HorizontalAlignment="Left">
+                    <ComboBox Grid.Row="0" Grid.Column="0" Width="150" Classes="rowCombo"
+                              FontSize="{DynamicResource FontCaption}"
+                              VerticalAlignment="Center"
+                              ItemsSource="{Binding PitchChoices}"
+                              SelectedItem="{Binding PitchLabel}"
+                              SelectionChanged="Pitch_Changed"
+                              ToolTip.Tip="这个键弹出哪个音。括号里是简谱"/>
+                    <Border Grid.Row="0" Grid.Column="1" Margin="6,0,0,0"
+                            CornerRadius="{DynamicResource RadiusControl}"
+                            BorderThickness="{Binding WaitBorderThickness}"
+                            BorderBrush="{Binding WaitBorderBrush}">
+                      <Button Width="130" FontSize="{DynamicResource FontSmall}" Padding="4,2"
+                              HorizontalContentAlignment="Center" Classes="secondary"
+                              Content="{Binding KeyCapText}"
+                              Foreground="{Binding KeyCapForeground}"
+                              Click="RowKey_Click"
+                              ToolTip.Tip="点一下，再按一个键，就把这个键绑到这个音"/>
+                    </Border>
+                    <Button Grid.Row="0" Grid.Column="2" Content="✕" Width="24" Margin="6,0,0,0"
+                            Padding="0" FontSize="{DynamicResource FontMicro}"
+                            HorizontalContentAlignment="Center" Classes="secondary"
+                            Click="RowRemove_Click" ToolTip.Tip="删除这一条"/>
+                    <ComboBox Grid.Row="1" Grid.Column="1" Width="150" Margin="6,2,0,0" HorizontalAlignment="Left"
+                              FontSize="{DynamicResource FontCaption}"
+                              IsVisible="{Binding Waiting}"
+                              ItemsSource="{Binding KeyChoices}"
+                              SelectionChanged="KeyName_Changed"
+                              PlaceholderText="选键名"
+                              ToolTip.Tip="手选一个键名，效果等于按了那个键"/>
+                    <TextBlock Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="2" Margin="8,2,0,0"
+                               VerticalAlignment="Center" FontSize="{DynamicResource FontMicro}"
+                               Classes="danger" TextWrapping="Wrap"
+                               Text="这个键绑了不止一个音" IsVisible="{Binding IsDuplicate}"/>
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
             </ScrollViewer>
-            <Button Grid.Row="1" x:Name="BtnKeyAdd" Content="+ 加一键" FontSize="{DynamicResource FontCaption}"
-                    Padding="8,3" Classes="secondary" HorizontalAlignment="Left" Click="KeyAdd_Click"
-                    ToolTip.Tip="追加一个按键"/>
-          </Grid>
 
-          <!-- 三个功能键 + 基准音 + 音域 + 两条策略 -->
-          <WrapPanel Grid.Row="2" Grid.Column="0" ItemSpacing="10" LineSpacing="6">
-            <StackPanel Orientation="Horizontal" Spacing="5">
-              <TextBlock Text="八度上" Classes="label"/>
-              <Button x:Name="BtnOctaveUp" Content="—" FontSize="{DynamicResource FontCaption}"
-                      Padding="8,2" Classes="secondary" MinWidth="72" MaxWidth="104"
-                      Click="KeyBindModifier_Click" Tag="up"
-                      ToolTip.Tip="点一下，再按一个键，作为升八度键"/>
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" Spacing="5">
-              <TextBlock Text="八度下" Classes="label"/>
-              <Button x:Name="BtnOctaveDown" Content="—" FontSize="{DynamicResource FontCaption}"
-                      Padding="8,2" Classes="secondary" MinWidth="72" MaxWidth="104"
-                      Click="KeyBindModifier_Click" Tag="down"
-                      ToolTip.Tip="点一下，再按一个键，作为降八度键"/>
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" Spacing="5">
-              <TextBlock Text="升半音" Classes="label"/>
-              <Button x:Name="BtnSharpKey" Content="—" FontSize="{DynamicResource FontCaption}"
-                      Padding="8,2" Classes="secondary" MinWidth="72" MaxWidth="104"
-                      Click="KeyBindModifier_Click" Tag="sharp"
-                      ToolTip.Tip="点一下，再按一个键，作为升半音键"/>
-            </StackPanel>
-          </WrapPanel>
+            <Button Content="+ 加一条" Classes="secondary" FontSize="{DynamicResource FontCaption}"
+                    Padding="8,1" HorizontalAlignment="Left" Click="RowAdd_Click"
+                    ToolTip.Tip="加一条空白绑定，音高取音域下限"/>
+          </StackPanel>
+        </Border>
 
-          <WrapPanel Grid.Row="3" Grid.Column="0" ItemSpacing="10" LineSpacing="6">
-            <StackPanel Orientation="Horizontal" Spacing="5">
-              <TextBlock Text="基准音" Classes="label" ToolTip.Tip="键位偏移的原点。60 = C4"/>
-              <TextBox x:Name="TxtBaseNote" Width="46" FontSize="{DynamicResource FontCaption}"
-                       Padding="4,2" VerticalContentAlignment="Center"
-                       KeyDown="KeymapNumber_KeyDown" LostFocus="KeymapNumber_LostFocus"/>
-              <TextBlock x:Name="TxtBaseNoteName" Classes="value" Width="32"/>
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" Spacing="5">
-              <TextBlock Text="音域" Classes="label"/>
-              <TextBox x:Name="TxtMinNote" Width="46" FontSize="{DynamicResource FontCaption}"
-                       Padding="4,2" VerticalContentAlignment="Center"
-                       KeyDown="KeymapNumber_KeyDown" LostFocus="KeymapNumber_LostFocus"/>
-              <TextBlock Text="~" Classes="value" Width="10" TextAlignment="Center"/>
-              <TextBox x:Name="TxtMaxNote" Width="46" FontSize="{DynamicResource FontCaption}"
-                       Padding="4,2" VerticalContentAlignment="Center"
-                       KeyDown="KeymapNumber_KeyDown" LostFocus="KeymapNumber_LostFocus"/>
-              <TextBlock x:Name="TxtMinNoteName" Classes="value" Width="30"/>
-              <TextBlock x:Name="TxtMaxNoteName" Classes="value" Width="30"/>
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" Spacing="5">
-              <TextBlock Text="超界策略" Classes="label"/>
-              <ComboBox x:Name="OutOfRangeCombo" Width="132" FontSize="{DynamicResource FontSmall}"
-                        VerticalAlignment="Center" SelectionChanged="KeymapPolicy_Changed"
-                        ToolTip.Tip="丢音 = 超出音域的音不发声；折八度 = 把音折回最近的可演奏八度"/>
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" Spacing="5">
-              <TextBlock Text="缺音策略" Classes="label"/>
-              <ComboBox x:Name="MissingNoteCombo" Width="132" FontSize="{DynamicResource FontSmall}"
-                        VerticalAlignment="Center" SelectionChanged="KeymapPolicy_Changed"
-                        ToolTip.Tip="就近吸附 = 缺的音用最近的可演奏音代替；丢弃 = 直接不发声"/>
-            </StackPanel>
-          </WrapPanel>
+        <!-- ============ 3. 功能键 ============ -->
+        <Border Classes="card">
+          <StackPanel Spacing="6">
+            <TextBlock Text="功能键（让手上的键弹出多个音）" Classes="sectionLabel" FontWeight="SemiBold"/>
+            <ItemsControl x:Name="FuncRows">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Grid ColumnDefinitions="Auto,Auto,Auto,Auto" Margin="0,1">
+                    <TextBlock Grid.Column="0" Width="78" Text="{Binding Label}"
+                               Classes="label" VerticalAlignment="Center"/>
+                    <Border Grid.Column="1" CornerRadius="{DynamicResource RadiusControl}"
+                            BorderThickness="{Binding WaitBorderThickness}"
+                            BorderBrush="{Binding WaitBorderBrush}">
+                      <Button Width="130" FontSize="{DynamicResource FontSmall}" Padding="4,2"
+                              HorizontalContentAlignment="Center" Classes="secondary"
+                              Content="{Binding KeyCapText}"
+                              Foreground="{Binding KeyCapForeground}"
+                              Click="FuncKey_Click"
+                              ToolTip.Tip="点一下，再按一个键，就把这个功能绑到这个键"/>
+                    </Border>
+                    <ComboBox Grid.Column="2" Width="150" Margin="6,0,0,0"
+                              FontSize="{DynamicResource FontCaption}"
+                              VerticalAlignment="Center" IsVisible="{Binding Waiting}"
+                              ItemsSource="{Binding KeyChoices}"
+                              SelectionChanged="KeyName_Changed"
+                              PlaceholderText="选键名"
+                              ToolTip.Tip="手选一个键名，效果等于按了那个键"/>
+                    <Button Grid.Column="3" Content="✕" Width="24" Margin="6,0,0,0"
+                            Padding="0" FontSize="{DynamicResource FontMicro}"
+                            HorizontalContentAlignment="Center" Classes="secondary"
+                            Click="FuncClear_Click" ToolTip.Tip="不用这个功能键，点了以后显示「未设置」"/>
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Border>
 
-          <!-- 竖向键位预览图 + 图例。放右列：与卷帘左侧琴键栏同一朝向 -->
-          <Border Grid.Row="0" Grid.RowSpan="4" Grid.Column="1" Margin="12,0,0,0" Padding="8,6"
-                  CornerRadius="6" Background="{DynamicResource BrushSurfaceAlt}"
-                  BorderBrush="{DynamicResource BrushBorder}" BorderThickness="1">
-            <StackPanel Spacing="5">
-              <TextBlock Text="键位预览（音高纵轴）" Classes="sectionLabel" FontWeight="SemiBold"/>
-              <local:KeymapKeyboardPreview x:Name="KeymapPreview" Width="176" Height="360"/>
-              <StackPanel Spacing="3">
-                <StackPanel Orientation="Horizontal" Spacing="4">
-                  <Border Width="10" Height="10" CornerRadius="2" VerticalAlignment="Center" Background="#5B6CF0"/>
-                  <TextBlock Text="有按键" Classes="caption"/>
-                </StackPanel>
-                <StackPanel Orientation="Horizontal" Spacing="4">
-                  <Border Width="10" Height="10" CornerRadius="2" VerticalAlignment="Center" Background="#B25A00"/>
-                  <TextBlock Text="折八度" Classes="caption"/>
-                </StackPanel>
-                <StackPanel Orientation="Horizontal" Spacing="4">
-                  <Border Width="10" Height="10" CornerRadius="2" VerticalAlignment="Center" Background="#A9B3C0"/>
-                  <TextBlock Text="丢音" Classes="caption"/>
-                </StackPanel>
-                <StackPanel Orientation="Horizontal" Spacing="4">
-                  <Border Width="10" Height="10" CornerRadius="2" VerticalAlignment="Center" Background="#C0392B"/>
-                  <TextBlock Text="音域内缺键" Classes="caption"/>
-                </StackPanel>
-                <StackPanel Orientation="Horizontal" Spacing="4">
-                  <Border Width="10" Height="10" CornerRadius="2" VerticalAlignment="Center" Background="#3A4757"/>
-                  <TextBlock Text="无键" Classes="caption"/>
-                </StackPanel>
+        <!-- ============ 4. 音域与取舍 ============ -->
+        <Border Classes="card">
+          <StackPanel Spacing="6">
+            <TextBlock Text="音域与取舍" Classes="sectionLabel" FontWeight="SemiBold"/>
+
+            <StackPanel Spacing="3">
+              <!-- 音名只写音名，不带简谱：位置够，不会被容器切一半。
+                   简谱仍然在音高下拉里（形如 C4  1(do)）。 -->
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBlock Text="音域" Classes="label" VerticalAlignment="Center"/>
+                <TextBlock Text="从" Classes="value" VerticalAlignment="Center"/>
+                <TextBox x:Name="TxtMinNote" Width="60" FontSize="{DynamicResource FontSmall}"
+                         Padding="5,2" VerticalContentAlignment="Center"
+                         KeyDown="Number_KeyDown" LostFocus="Number_LostFocus"/>
+                <TextBlock x:Name="TxtMinNoteName" Classes="value" MinWidth="42"
+                           FontFamily="{DynamicResource FontMono}"/>
+                <TextBlock Text="到" Classes="value" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                <TextBox x:Name="TxtMaxNote" Width="60" FontSize="{DynamicResource FontSmall}"
+                         Padding="5,2" VerticalContentAlignment="Center"
+                         KeyDown="Number_KeyDown" LostFocus="Number_LostFocus"/>
+                <TextBlock x:Name="TxtMaxNoteName" Classes="value" MinWidth="42"
+                           FontFamily="{DynamicResource FontMono}"/>
               </StackPanel>
+              <TextBlock x:Name="TxtRangeError" Classes="caption" IsVisible="False"
+                         Foreground="{DynamicResource BrushDanger}"
+                         Text="下面的音不能高于上面的音"/>
             </StackPanel>
-          </Border>
-        </Grid>
-      </Border>
 
-      <!-- ============ 说明 ============ -->
-      <Border Background="{DynamicResource BrushSurfaceAlt}" CornerRadius="8" Padding="10,8">
-        <StackPanel Spacing="4">
-          <TextBlock x:Name="TxtPreviewMods" Classes="caption" TextWrapping="Wrap"
-                     Foreground="{DynamicResource BrushTextSecondary}" Text=""/>
-          <TextBlock Classes="caption" TextWrapping="Wrap" LineHeight="17"
-                     Foreground="{DynamicResource BrushTextSecondary}"
-                     Text="改完立即生效并写入方案文件。点键帽或三个功能键按钮后，按一个键完成绑定，按 Esc 取消。"/>
-        </StackPanel>
-      </Border>
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock Text="超出音域的音" Classes="label" VerticalAlignment="Center"/>
+              <ComboBox x:Name="OutOfRangeCombo" Width="190" FontSize="{DynamicResource FontSmall}"
+                        VerticalAlignment="Center" SelectionChanged="Policy_Changed"
+                        ToolTip.Tip="音太高或太低时怎么办"/>
+            </StackPanel>
 
-      <Button x:Name="BtnClose" Content="关闭" Classes="accent" HorizontalAlignment="Right"
-              Padding="18,6" FontSize="{DynamicResource FontBody}" Click="Close_Click"/>
-    </StackPanel>
-  </ScrollViewer>
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock Text="音域内缺这个音" Classes="label" VerticalAlignment="Center"/>
+              <ComboBox x:Name="MissingNoteCombo" Width="190" FontSize="{DynamicResource FontSmall}"
+                        VerticalAlignment="Center" SelectionChanged="Policy_Changed"
+                        ToolTip.Tip="音域内正好没有这个音时怎么办"/>
+            </StackPanel>
+
+            <TextBlock Classes="caption" TextWrapping="Wrap" LineHeight="16"
+                       Text="一首曲子里超出音域的音，按上面第一条处理。"/>
+          </StackPanel>
+        </Border>
+      </StackPanel>
+    </ScrollViewer>
+
+    <!-- 常驻统计行 -->
+    <Border Grid.Row="1" Padding="12,6" Background="{DynamicResource BrushSurface}"
+            BorderBrush="{DynamicResource BrushBorder}" BorderThickness="0,1,0,0">
+      <TextBlock Text="{Binding StatsText}" Classes="caption" TextWrapping="Wrap"/>
+    </Border>
+  </Grid>
 </Window>
