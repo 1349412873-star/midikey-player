@@ -3,18 +3,23 @@ using MidiKeyPlayer.Midi;
 
 namespace MidiKeyPlayer.Engine;
 
-/// <summary>乐器上的一个动作：音键本身，或三个修饰键。</summary>
-public enum LiveKey
-{
-    Z, X, C, V, B, N, M, Comma,        // 音键：do re mi fa sol la si 高音do
-    MouseLeft,                          // 降一个八度
-    MouseRight,                         // 升一个八度
-    MouseSharp                          // 升半音
-}
-
-/// <summary>一次映射结果：MIDI 音高 → 乐器动作。</summary>
+/// <summary>
+/// 一次映射结果：MIDI 音高 → 乐器动作。
+/// <paramref name="Key"/> 是方案里的键名（"Z" / "," / "PageUp" / "MouseLeft"）。
+/// </summary>
 public readonly record struct LiveMapping(
-    bool Playable, LiveKey Key, bool Low, bool High, bool Sharp, string Reason);
+    bool Playable, string Key, bool Low, bool High, bool Sharp, string Reason)
+{
+    /// <summary>给人看的按键名：逗号写成全角，鼠标键写成中文。</summary>
+    public string KeyLabel => string.IsNullOrEmpty(Key) ? "" : Key switch
+    {
+        "," => "，",
+        "MouseLeft" => "左键",
+        "MouseRight" => "右键",
+        "MouseMiddle" => "中键",
+        _ => Key,
+    };
+}
 
 /// <summary>
 /// MIDI 设备实时转键盘：把设备送来的音符立刻变成目标程序能读到的按键。
@@ -22,6 +27,8 @@ public readonly record struct LiveMapping(
 /// 与 <see cref="PlaybackEngine"/> 的分工：
 /// - 文件播放：整首谱面提前算好事件表，按音乐时间派发。
 /// - 设备实时：来一个音发一个音，只留修饰键提前量。
+///
+/// 键位、音域、超界与缺音行为全部读 <see cref="KeymapProfile"/>：音乐键、八度键、升半音键都是方案里的键名。
 ///
 /// 时序规则沿用 <see cref="InputTiming"/> 的物理毫秒：
 /// 修饰键比音键早 ModLeadMs；每次按下至少跨过一个帧点（否则目标程序按帧采样时读不到）；
@@ -43,11 +50,11 @@ public sealed class LivePlayback : IDisposable
     private volatile bool _running;
     private bool _disposed;
 
-    /// <summary>一个待发出的动作。</summary>
+    /// <summary>一个待发出的动作。Key 是方案里的键名。</summary>
     private sealed class Pending
     {
         public double Due;                 // 到点时刻（Environment.TickCount64 毫秒）
-        public LiveKey Key;
+        public string Key = "";
         public bool Down;
     }
 
@@ -55,7 +62,7 @@ public sealed class LivePlayback : IDisposable
     private sealed class Sounding
     {
         public int Pitch;
-        public LiveKey Key;
+        public string Key = "";
         public double DownAt;              // 排定的按下时刻
         public double MinUpAt;             // 最早可抬起时刻（保证目标程序采样到）
         public bool Released;              // 是否已排定抬起
@@ -65,37 +72,17 @@ public sealed class LivePlayback : IDisposable
     /// 输出口。默认直接调 <see cref="InputSender"/>；时序回归测试换成记录器，
     /// 就能在没有目标程序、也不真的动键盘的情况下检查整条时间线。
     /// </summary>
-    public Action<LiveKey, bool> Sink { get; set; } = DefaultSink;
+    public Action<string, bool> Sink { get; set; } = DefaultSink;
 
-    private static void DefaultSink(LiveKey key, bool down)
+    private static void DefaultSink(string key, bool down)
     {
-        switch (key)
-        {
-            case LiveKey.MouseLeft:
-                if (down) InputSender.MouseDown(InputSender.MouseButton.Left);
-                else InputSender.MouseUp(InputSender.MouseButton.Left);
-                break;
-            case LiveKey.MouseRight:
-                if (down) InputSender.MouseDown(InputSender.MouseButton.Right);
-                else InputSender.MouseUp(InputSender.MouseButton.Right);
-                break;
-            case LiveKey.MouseSharp:
-                if (down) InputSender.MouseDown(InputSender.MouseButton.Middle);
-                else InputSender.MouseUp(InputSender.MouseButton.Middle);
-                break;
-            case LiveKey.Comma:
-                if (down) InputSender.KeyDown(','); else InputSender.KeyUp(',');
-                break;
-            default:
-                char c = (char)('Z' + (int)key);
-                if (down) InputSender.KeyDown(c); else InputSender.KeyUp(c);
-                break;
-        }
+        if (string.IsNullOrEmpty(key)) return;
+        if (down) InputSender.KeyDown(key); else InputSender.KeyUp(key);
     }
 
     // —— 修饰键状态机（锁内访问）——
-    private LiveKey? _modKey;              // 当前按住的八度修饰键（MouseLeft / MouseRight）
-    private bool _modSharp;                // 当前是否按着中键（升半音）
+    private string? _modKey;               // 当前按住的八度修饰键（方案里的键名）
+    private bool _modSharp;                // 当前是否按着升半音键
 
     // —— 输出时间线游标（锁内访问）——
     private double _lastDownAt = double.NegativeInfinity;   // 最后一次音键按下时刻
@@ -114,6 +101,23 @@ public sealed class LivePlayback : IDisposable
     /// <summary>同一根音键上被后来音符顶掉的次数。</summary>
     public int StolenCount { get; private set; }
 
+    private KeymapProfile? _keymap;
+
+    /// <summary>
+    /// 本实例使用的键位方案。赋值时同步成全局活动方案
+    /// （<see cref="KeymapProfile.Current"/>），让文件播放与实时演奏用同一份键表。
+    /// </summary>
+    public KeymapProfile Keymap
+    {
+        get => _keymap ?? KeymapProfile.Current;
+        set
+        {
+            if (value == null) return;
+            _keymap = value;
+            KeymapProfile.Current = value;
+        }
+    }
+
     /// <summary>移调（半音，-24..+24）。</summary>
     public int Transpose
     {
@@ -122,7 +126,7 @@ public sealed class LivePlayback : IDisposable
     }
     private int _transpose;
 
-    /// <summary>基准八度（MIDI 八度编号，C4 = 4）。乐器从这个八度的 do 演奏到高一个八度的 do。</summary>
+    /// <summary>基准八度（MIDI 八度编号，C4 = 4）。方案基准八度从这里上下移动。</summary>
     public int BaseOctave
     {
         get => _baseOctave;
@@ -145,50 +149,46 @@ public sealed class LivePlayback : IDisposable
     public bool AutoFit { get; set; } = true;
 
     /// <summary>
-    /// 音高 → 乐器动作。基准八度 b 的 do..si 是 z..m；
-    /// 高一个八度按右键，低一个八度按左键；升半音按中键；
-    /// 最高只能到"高高音 do / #do"（右键 + 逗号，可再加中键）。
+    /// 音高 → 乐器动作。用全局活动方案（<see cref="KeymapProfile.Current"/>）。
     /// </summary>
     public static LiveMapping Map(int pitch, int baseOctave)
+        => Map(pitch, baseOctave, KeymapProfile.Current);
+
+    /// <summary>
+    /// 音高 → 乐器动作。音高先按 baseOctave 与方案基准八度的差整体移八度，
+    /// 再交给 <see cref="KeymapProfile.TryKeyOfPitch"/> 查表（含音域、超界与缺音策略）。
+    /// </summary>
+    public static LiveMapping Map(int pitch, int baseOctave, KeymapProfile profile)
     {
-        int pc = Music.Mod(pitch, 12);
-        int oct = pitch / 12 - 1;
-        int d = oct - baseOctave;
+        int shifted = pitch - 12 * (baseOctave - profile.BaseOctave);
 
-        bool sharp = NoteMapper.IsSharpPitch(pitch);
-        int idx = NoteMapper.KeyOfPitch(pitch) switch
+        if (profile.TryKeyOfPitch(shifted, out string key, out int offset, out bool sharp, out _))
+            return new LiveMapping(true, key, offset < 0, offset > 0, sharp, "");
+
+        var (lo, hi) = PlayableRange(baseOctave, profile);
+        if (!profile.InRange(shifted))
         {
-            'Z' => 0, 'X' => 1, 'C' => 2, 'V' => 3, 'B' => 4, 'N' => 5, _ => 6   // do..si
-        };
-
-        if (d is >= -1 and <= 1)
-            return new LiveMapping(true, (LiveKey)idx, d == -1, d == 1, sharp, "");
-        if (d == 2 && pc is 0 or 1)
-            return new LiveMapping(true, LiveKey.Comma, false, true, pc == 1, "");
-
-        var (rlo, rhi) = PlayableRange(baseOctave);
-        return new LiveMapping(false, LiveKey.Z, false, false, false,
-            $"超出音域（本档可演奏 {Music.NoteName(rlo)} ~ {Music.NoteName(rhi)}，可用基准八度或移调调整）");
+            return new LiveMapping(false, "", false, false, false,
+                $"超出音域（本档可演奏 {Music.NoteName(lo)} ~ {Music.NoteName(hi)}，可用基准八度或移调调整）");
+        }
+        return new LiveMapping(false, "", false, false, false,
+            "键表里没有这个音（缺音策略：丢弃），可在方案里加键或改成「就近吸附」");
     }
 
     /// <summary>
-    /// 可演奏音高范围（含）。必须与 <see cref="Map"/> 的判定一致：
-    /// 最低音 = 低音 do，最高音 = 高高音 #do（比基准八度高一个八度的 C 再加半音）。
+    /// 可演奏音高范围（含）。与 <see cref="Map"/> 的判定一致：方案声明的 minNote/maxNote
+    /// 跟着基准八度整体移动。
     /// </summary>
     public static (int Lo, int Hi) PlayableRange(int baseOctave)
-        => RangeCore(baseOctave);
+        => PlayableRange(baseOctave, KeymapProfile.Current);
 
-    /// <summary>
-    /// 范围计算的实现点。写成一个明确的偏移量，避免读者去数八度：
-    /// 低音 do = 基准八度的 C；最高音 = 再高两个八度 + 一个半音（高高音 #do）。
-    /// 基准 4 档因此是 48(C3) ~ 85(C#6)，与 <see cref="Map"/> 的判定完全一致。
-    /// </summary>
-    private static (int Lo, int Hi) RangeCore(int baseOctave)
+    private static (int Lo, int Hi) PlayableRange(int baseOctave, KeymapProfile profile)
     {
-        const int TopOffset = 37;    // 3 个八度 + 1 个半音 = 36 + 1
-        int low = baseOctave * 12;
-        int high = baseOctave * 12 + TopOffset;
-        return (low, high);
+        int lo = profile.ResolveMinNote();
+        int hi = profile.ResolveMaxNote();
+        if (lo > hi) (lo, hi) = (hi, lo);
+        int shift = 12 * (baseOctave - profile.BaseOctave);
+        return (lo + shift, hi + shift);
     }
 
     /// <summary>
@@ -288,7 +288,7 @@ public sealed class LivePlayback : IDisposable
         {
             NoteOnCount++;
             octaveMoved = ObserveForAutoFit(pitch);
-            map = Map(pitch + _transpose, _baseOctave);
+            map = Map(pitch + _transpose, _baseOctave, Keymap);
             if (!map.Playable) OutOfRangeCount++;
         }
         NoteObserved?.Invoke(map, pitch, velocity);
@@ -303,6 +303,8 @@ public sealed class LivePlayback : IDisposable
 
         lock (_gate)
         {
+            var profile = Keymap;
+
             // 同一个键上已经在响的音：先换掉（乐器一次只演奏一个音，后来的优先）
             foreach (var s in _sounding.Where(x => !x.Released && x.Key == map.Key).ToList())
             {
@@ -322,17 +324,19 @@ public sealed class LivePlayback : IDisposable
 
             // 修饰键切换：老状态立刻松开，新状态提前 modLead 按下
             double modLead = Math.Max(Timing.ModLeadMs, Timing.FrameMs);
-            LiveKey? wantMod = map.Low ? LiveKey.MouseLeft : map.High ? LiveKey.MouseRight : null;
+            string? wantMod = map.Low ? profile.OctaveDown : map.High ? profile.OctaveUp : null;
+            if (string.IsNullOrEmpty(wantMod)) wantMod = null;
             if (_modKey != wantMod)
             {
-                if (_modKey is LiveKey old) Enqueue(now, old, false);
-                if (wantMod is LiveKey neu) Enqueue(Math.Max(now, minDown - modLead), neu, true);
+                if (_modKey is { Length: > 0 } old) Enqueue(now, old, false);
+                if (wantMod is { Length: > 0 } neu) Enqueue(Math.Max(now, minDown - modLead), neu, true);
                 _modKey = wantMod;
             }
-            if (_modSharp != map.Sharp)
+            string? sharpKey = string.IsNullOrEmpty(profile.Sharp) ? null : profile.Sharp;
+            if (_modSharp != map.Sharp && sharpKey != null)
             {
-                if (_modSharp) Enqueue(now, LiveKey.MouseSharp, false);
-                if (map.Sharp) Enqueue(Math.Max(now, minDown - modLead), LiveKey.MouseSharp, true);
+                if (_modSharp) Enqueue(now, sharpKey, false);
+                if (map.Sharp) Enqueue(Math.Max(now, minDown - modLead), sharpKey, true);
                 _modSharp = map.Sharp;
             }
 
@@ -353,7 +357,7 @@ public sealed class LivePlayback : IDisposable
         }
     }
 
-    private LiveKey? _lastKey;
+    private string? _lastKey;
 
     /// <summary>设备松开了一个音（设备线程调用）。</summary>
     public void NoteOff(int pitch)
@@ -374,8 +378,9 @@ public sealed class LivePlayback : IDisposable
         lock (_gate)
         {
             foreach (var s in _sounding.Where(x => !x.Released).ToList()) ReleaseNote(s, now, retrigger: false);
-            if (_modSharp) { Enqueue(now, LiveKey.MouseSharp, false); _modSharp = false; }
-            if (_modKey is LiveKey m) { Enqueue(now, m, false); _modKey = null; }
+            string? sharpKey = string.IsNullOrEmpty(Keymap.Sharp) ? null : Keymap.Sharp;
+            if (_modSharp && sharpKey != null) { Enqueue(now, sharpKey, false); _modSharp = false; }
+            if (_modKey is { Length: > 0 } m) { Enqueue(now, m, false); _modKey = null; }
             _wake.Release();
         }
     }
@@ -407,8 +412,9 @@ public sealed class LivePlayback : IDisposable
     }
 
     /// <summary>插入队列并保持按 Due 升序（同刻事件保持插入顺序：先抬起，后按下）。</summary>
-    private void Enqueue(double due, LiveKey key, bool down)
+    private void Enqueue(double due, string key, bool down)
     {
+        if (string.IsNullOrEmpty(key)) return;
         if (_queue.Count >= MaxQueue) _queue.RemoveAt(0);
         var ev = new Pending { Due = due, Key = key, Down = down };
         int i = _queue.Count;
@@ -486,7 +492,7 @@ public sealed class LivePlayback : IDisposable
 
 #if MIDIKEY_TEST
     /// <summary>仅供时序回归测试：把队列里的事件一次性算出来（不真的发按键）。</summary>
-    public (double Ms, LiveKey Key, bool Down)[] DrainForTest()
+    public (double Ms, string Key, bool Down)[] DrainForTest()
         => _queue.OrderBy(e => e.Due)
                  .Select(e => (e.Due, e.Key, e.Down))
                  .ToArray();

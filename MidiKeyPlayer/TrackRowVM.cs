@@ -10,6 +10,9 @@ public sealed class TrackRowVM : INotifyPropertyChanged
     private bool _isMix;
     private int _mixRank;
     private bool _isRecommended;
+    private int _voiceIndex = -1;
+    private Avalonia.Media.IBrush? _voiceBrush;
+    private bool _voiceActive;
 
     public TrackRowVM(MidiCandidate candidate)
     {
@@ -108,6 +111,50 @@ public sealed class TrackRowVM : INotifyPropertyChanged
 
     public Avalonia.Media.FontWeight NameWeight =>
         IsRecommended ? Avalonia.Media.FontWeight.SemiBold : Avalonia.Media.FontWeight.Normal;
+
+    // ================= 声轨配色 =================
+
+    /// <summary>
+    /// 声轨颜色号：参与合奏的轨 = 勾选顺序（0 起），未参与合奏时主旋律轨 = 0，其余 = -1。
+    /// 卷帘按同一个号上色，所以左侧文字与卷帘音符一一对应。
+    /// </summary>
+    public int VoiceIndex
+    {
+        get => _voiceIndex;
+        set
+        {
+            if (_voiceIndex == value) return;
+            _voiceIndex = value;
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>
+    /// 名称列的文字颜色。色块来自 Styles\Theme.axaml 的 BrushVoice0..11，
+    /// 由 MainWindow 按 VoiceIndex 取资源后写入；未参与合奏与打击乐轨用弱化色。
+    /// </summary>
+    public Avalonia.Media.IBrush? VoiceBrush
+    {
+        get => _voiceBrush;
+        set
+        {
+            if (ReferenceEquals(_voiceBrush, value)) return;
+            _voiceBrush = value;
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>本轨当前是否参与演奏（决定卷帘与列表用亮色还是弱化色）。</summary>
+    public bool IsVoiceActive
+    {
+        get => _voiceActive;
+        set
+        {
+            if (_voiceActive == value) return;
+            _voiceActive = value;
+            OnPropertyChanged();
+        }
+    }
 
     public event PropertyChangedEventHandler? PropertyChanged;
 

@@ -7,10 +7,14 @@ namespace MidiKeyPlayer.Engine;
 /// <summary>后台静默检查 GitHub 新版本，有新版时界面提示并可跳转 Release 页。</summary>
 public static class AutoUpdate
 {
-    /// <summary>自动更新开关。仓库地址确定前保持关闭；填好 Owner / Repo 后改成 true 即可。</summary>
-    private const bool Enabled = false;
+    /// <summary>
+    /// 自动更新开关。仓库目前是私有库，未带凭据的检查会返回 404，所以保持关闭；
+    /// 仓库转为公开后改成 true 即可。用 static readonly 而不是 const：
+    /// const 为 false 时编译器会把后面整段检查代码判成不可达并报 CS0162。
+    /// </summary>
+    private static readonly bool Enabled = false;
 
-    private const string Owner = "<你的账号>";
+    private const string Owner = "ChickenD233";
     private const string Repo = "midikey-player";
 
     /// <summary>最新 Release 页面（用于跳转下载）。</summary>

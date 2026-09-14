@@ -2,93 +2,94 @@ using MidiKeyPlayer.Midi;
 
 namespace MidiKeyPlayer.Engine;
 
-/// <summary>八度档位：相对基准八度的偏移。</summary>
-public enum Slot
-{
-    Low = -1,   // 比基准低一个八度 → 按住鼠标左键
-    Mid = 0,    // 基准八度     → 不按鼠标
-    High = 1    // 比基准高一个八度 → 按住鼠标右键
-}
-
 /// <summary>映射后的单个可演奏音符。</summary>
 public sealed class MappedNote
 {
+    /// <summary>移调后的原音高（界面与卷帘按它显示）。</summary>
     public int Pitch { get; init; }
+
     public double Start { get; init; }   // 秒（未乘速度）
     public double End { get; init; }
-    public char Key { get; init; }       // 'Z'..'M'
-    public bool Sharp { get; init; }     // true → 需按住鼠标中键（升半音）
-    public Slot OctaveSlot { get; init; }
-    public bool InRange { get; init; }   // false → 超出三个八度，空拍跳过
+
+    /// <summary>音键的字符形式。命名键（PageUp 等）是私用区哨兵字符，见 <see cref="KeymapProfile.NameOfKeyChar"/>。</summary>
+    public char Key { get; init; }
+
+    /// <summary>方案里写的键名（"Z" / "," / "PageUp" / "MouseLeft"）。</summary>
+    public string KeyName { get; init; } = "";
+
+    /// <summary>true → 需要按住升半音键。</summary>
+    public bool Sharp { get; init; }
+
+    /// <summary>八度档位：相对方案基准音所在八度的偏移（-1 / 0 / +1）。</summary>
+    public int OctaveOffset { get; init; }
+
+    /// <summary>实际发声音高：折八度或就近吸附后可能与 <see cref="Pitch"/> 不同。</summary>
+    public int SoundingPitch { get; init; }
+
+    /// <summary>false → 不发声（超界丢音、缺音丢弃、移调越界、键表为空）。</summary>
+    public bool InRange { get; init; }
+
     public string SkipReason { get; init; } = "";
+
+    /// <summary>发声了，但音高被折八度/吸附挪过。</summary>
+    public bool Shifted => InRange && SoundingPitch != Pitch;
 }
 
 /// <summary>一次映射的结果。</summary>
 public sealed class MappingResult
 {
-    public int BaseOctave { get; set; }        // 基准八度（MIDI 编号，C4=第4八度）
+    /// <summary>基准八度（MIDI 编号，C4 = 第 4 八度）。</summary>
+    public int BaseOctave { get; set; }
+
     public List<MappedNote> Notes { get; init; } = new();
+
     public int InRangeCount => Notes.Count(n => n.InRange);
     public int SkipCount => Notes.Count(n => !n.InRange);
+
+    /// <summary>发声但音高被折八度或吸附挪过的音数。</summary>
+    public int ShiftedCount => Notes.Count(n => n.Shifted);
 }
 
 /// <summary>
-/// 把主旋律 MIDI 音高映射到乐器按键：一个八度 do..ti → z x c v b n m；
-/// 升半音 → 加按鼠标中键；不按鼠标=基准八度、按左键=低八度、按右键=高八度；超出三个八度则空拍。
+/// 把主旋律 MIDI 音高映射成乐器按键。键位、音域、超界与缺音行为全部读
+/// <see cref="KeymapProfile.Current"/>：
+/// 键表给出「键名 → 半音偏移」，音域由 minNote/maxNote 决定，
+/// 超界按 outOfRange 丢音或折八度，键表里没有的半音按 missingNote 吸附或丢弃。
 /// </summary>
 public static class NoteMapper
 {
-    /// <summary>do..ti 对应的键位（z x c v b n m）。</summary>
-    public static readonly char[] Keys = { 'Z', 'X', 'C', 'V', 'B', 'N', 'M' };
-
-    /// <summary>高高音do 用的键：键盘逗号“，”。</summary>
-    public const char TopKey = ',';
-
-    /// <summary>某个音高在基准=baseOct 下是否可演奏：基准±1 八度，外加最高两个音。</summary>
-    private static bool Reachable(int pitch, int baseOct)
-    {
-        int d = pitch / 12 - 1 - baseOct;
-        if (d is >= -1 and <= 1) return true;
-        if (d == 2)
-        {
-            int pc = Music.Mod(pitch, 12);
-            return pc is 0 or 1;   // 高高音do / 高高音#do（右键+逗号，可再加中键）
-        }
-        return false;
-    }
-
-    /// <summary>自然音（无升降）对应的半音号。</summary>
-    private static readonly int[] NaturalPc = { 0, 2, 4, 5, 7, 9, 11 };
-
-    private static readonly HashSet<int> SharpPc = new() { 1, 3, 6, 8, 10 };
-
-    private static int DiatonicIndexOf(int pitchClass) => pitchClass switch
-    {
-        0 => 0, 2 => 1, 4 => 2, 5 => 3, 7 => 4, 9 => 5, 11 => 6,
-        _ => -1
-    };
-
-    /// <summary>取任意音高的键位：先按半音号归到最近的自然音，再给 z..m 键。</summary>
+    /// <summary>
+    /// 画面上要按的音键字符。查不到返回 ' '（空键）。
+    /// 旧接口保留：内部走当前方案。
+    /// </summary>
     public static char KeyOfPitch(int pitch)
+        => KeymapProfile.Current.TryKeyOfPitch(pitch, out string key, out _, out _)
+            ? KeymapProfile.KeyCharOf(key)
+            : ' ';
+
+    /// <summary>该音高是否需要按住升半音键（旧接口保留：内部走当前方案）。</summary>
+    public static bool IsSharpPitch(int pitch)
+        => KeymapProfile.Current.TryKeyOfPitch(pitch, out _, out _, out bool sharp) && sharp;
+
+    /// <summary>
+    /// 某个音高在基准八度 baseOctave 下是否可演奏：先按方案音域判断，再查键表。
+    /// baseOctave 与方案基准八度（BaseNote 所在八度）的差就是整体移八度的量。
+    /// </summary>
+    public static bool IsReachable(int pitch, int baseOctave)
     {
-        int pc = Music.Mod(pitch, 12);
-        int idx = DiatonicIndexOf(pc);
-        if (idx < 0)
-        {
-            // 升号音：降半音后取自然音
-            pc = Music.Mod(pc - 1, 12);
-            idx = DiatonicIndexOf(pc);
-        }
-        return Keys[idx];
+        var profile = KeymapProfile.Current;
+        int shifted = pitch - 12 * (baseOctave - profile.BaseOctave);
+        if (!profile.InRange(shifted)) return false;
+        return profile.TryKeyOfPitch(shifted, out _, out _, out _, out _);
     }
 
-    /// <summary>该音高是否属于“向上的半音”（需要中键）。</summary>
-    public static bool IsSharpPitch(int pitch) => SharpPc.Contains(Music.Mod(pitch, 12));
-
-    /// <summary>自动选出基准八度，使可演奏区（基准±1八度 + 高高音do/#do）容纳最多音符。</summary>
+    /// <summary>
+    /// 自动选基准八度：让可演奏（落在方案音域内且键表里有键）的音最多；
+    /// 打平时取更靠近所有音平均八度的那个。
+    /// </summary>
     public static int AutoBaseOctave(IReadOnlyList<int> pitches)
     {
-        if (pitches.Count == 0) return 4;
+        if (pitches.Count == 0) return KeymapProfile.Current.BaseOctave;
 
         int minO = int.MaxValue, maxO = int.MinValue;
         double sumO = 0;
@@ -105,7 +106,7 @@ public static class NoteMapper
         int bestPlay = -1;
         for (int b = minO; b <= maxO; b++)
         {
-            int play = pitches.Count(p => Reachable(p, b));
+            int play = pitches.Count(p => IsReachable(p, b));
             if (play > bestPlay ||
                 (play == bestPlay && Math.Abs(b - meanO) < Math.Abs(bestB - meanO)))
             {
@@ -122,6 +123,7 @@ public static class NoteMapper
     /// </summary>
     public static MappingResult Map(IReadOnlyList<RawNote> notes, int transpose, int? manualBaseOctave)
     {
+        var profile = KeymapProfile.Current;
         var result = new MappingResult();
 
         var valid = new List<int>();
@@ -134,62 +136,43 @@ public static class NoteMapper
         int baseOctave = manualBaseOctave ?? AutoBaseOctave(valid);
         result.BaseOctave = baseOctave;
 
+        // baseOctave 相对方案基准八度整体移动多少个八度；音域与键表都跟着移动。
+        int shift = 12 * (baseOctave - profile.BaseOctave);
+        int lo = profile.ResolveMinNote();
+        int hi = profile.ResolveMaxNote();
+        bool empty = profile.Keys.Count == 0;
+
         foreach (var n in notes)
         {
             int p = n.Pitch + transpose;
             if (p < 0 || p > 127)
             {
-                result.Notes.Add(new MappedNote
-                {
-                    Pitch = p, Start = n.Start, End = n.End,
-                    Key = ' ', Sharp = false, OctaveSlot = Slot.Mid,
-                    InRange = false, SkipReason = "移调后超出 MIDI 音域"
-                });
+                result.Notes.Add(Skipped(p, n, "移调后超出 MIDI 音域"));
                 continue;
             }
 
-            int oct = p / 12 - 1;
-            int diff = oct - baseOctave;
-
-            if (diff < -1 || diff > 2)
+            if (empty)
             {
-                result.Notes.Add(new MappedNote
-                {
-                    Pitch = p, Start = n.Start, End = n.End,
-                    Key = KeyOfPitch(p), Sharp = IsSharpPitch(p),
-                    OctaveSlot = Slot.Mid,
-                    InRange = false,
-                    SkipReason = $"音区超出乐器可演奏范围(第{oct}八度)"
-                });
+                result.Notes.Add(Skipped(p, n, "键位方案的键表是空的"));
                 continue;
             }
 
-            if (diff == 2)
+            int want = p - shift;
+            if (!profile.InRange(want))
             {
-                // 最上方只有两个音：高高音do、高高音#do（右键 + 逗号，带#再加中键）
-                int pc = Music.Mod(p, 12);
-                if (pc is not (0 or 1))
+                if (profile.OutOfRange == OutOfRangeMode.Drop)
                 {
-                    result.Notes.Add(new MappedNote
-                    {
-                        Pitch = p, Start = n.Start, End = n.End,
-                        Key = TopKey, Sharp = pc == 1,
-                        OctaveSlot = Slot.High,
-                        InRange = false,
-                        SkipReason = "最高只能到 高高音#do"
-                    });
+                    result.Notes.Add(Skipped(p, n,
+                        $"音区超出可演奏范围（{Music.NoteName(Math.Min(lo, hi))} ~ {Music.NoteName(Math.Max(lo, hi))}）"));
                     continue;
                 }
-                result.Notes.Add(new MappedNote
-                {
-                    Pitch = p,
-                    Start = n.Start,
-                    End = n.End,
-                    Key = TopKey,
-                    Sharp = pc == 1,
-                    OctaveSlot = Slot.High,
-                    InRange = true
-                });
+                want = profile.FoldIntoRange(want);
+            }
+
+            if (!profile.TryKeyOfPitch(want, out string keyName, out int octaveOffset, out bool sharp,
+                                      out int sounding))
+            {
+                result.Notes.Add(Skipped(p, n, "该音在键表里没有对应的键（缺音策略：丢弃）"));
                 continue;
             }
 
@@ -198,15 +181,31 @@ public static class NoteMapper
                 Pitch = p,
                 Start = n.Start,
                 End = n.End,
-                Key = KeyOfPitch(p),
-                Sharp = IsSharpPitch(p),
-                OctaveSlot = (Slot)diff,
-                InRange = true
+                Key = KeymapProfile.KeyCharOf(keyName),
+                KeyName = keyName,
+                Sharp = sharp,
+                OctaveOffset = octaveOffset,
+                SoundingPitch = sounding + shift,
+                InRange = true,
             });
         }
 
         return result;
     }
+
+    private static MappedNote Skipped(int pitch, RawNote n, string reason) => new()
+    {
+        Pitch = pitch,
+        Start = n.Start,
+        End = n.End,
+        Key = ' ',
+        KeyName = "",
+        Sharp = false,
+        OctaveOffset = 0,
+        SoundingPitch = pitch,
+        InRange = false,
+        SkipReason = reason,
+    };
 
     /// <summary>
     /// 多声部合奏合成单音线：同刻多个声部一起响时只保留编号最小（Rank 最小）的声部；
@@ -247,7 +246,8 @@ public static class NoteMapper
                         Pitch = o.Note.Pitch,
                         Start = best.Note.End,          // 主声部结束后才轮到它
                         End = o.Note.End,
-                        Velocity = o.Note.Velocity
+                        Velocity = o.Note.Velocity,
+                        Channel = o.Note.Channel        // 打击乐判定要用声道，不能丢
                     }));
                 }
             }
@@ -270,7 +270,8 @@ public static class NoteMapper
                         Pitch = c.Note.Pitch,
                         Start = lastNote.End,
                         End = c.Note.End,
-                        Velocity = c.Note.Velocity
+                        Velocity = c.Note.Velocity,
+                        Channel = c.Note.Channel
                     });
                 }
                 continue;
@@ -298,22 +299,33 @@ public static class NoteMapper
             Pitch = n.Pitch,
             Start = Math.Max(0, n.Start - first),
             End = Math.Max(0, n.End - first),
-            Velocity = n.Velocity
+            Velocity = n.Velocity,
+            Channel = n.Channel
         }).ToList();
     }
 
     /// <summary>给界面用的单音描述。</summary>
     public static string Describe(MappedNote n, bool withTime)
     {
-        string slot = n.OctaveSlot switch
+        if (!n.InRange) return (withTime ? $"{n.Start:F2}s " : "") + "空拍（不发声）";
+
+        var profile = KeymapProfile.Current;
+        string slot = n.OctaveOffset switch
         {
-            Slot.Low => "低八度(按左键)",
-            Slot.High => "高八度(按右键)",
+            < 0 => OctaveLabel(profile.OctaveDown, "低八度"),
+            > 0 => OctaveLabel(profile.OctaveUp, "高八度"),
             _ => "基准八度"
         };
-        string keyShow = n.Key == TopKey ? "，" : n.Key.ToString();
-        string sharp = n.Sharp ? "+升半音(按中键) " : "";
+        // 只显示方案里的键名：内部的哨兵字符绝不给人看
+        string keyShow = string.IsNullOrEmpty(n.KeyName) ? "（无按键）"
+            : (n.KeyName == "," ? "，" : n.KeyName);
+        string sharpName = string.IsNullOrWhiteSpace(profile.Sharp) ? "升半音键" : profile.Sharp!;
+        string sharp = n.Sharp ? $"{sharpName}+升半音 " : "";
+        string fold = n.Shifted ? $"（折到 {Music.NoteName(n.SoundingPitch)}）" : "";
         string time = withTime ? $"{n.Start:F2}s " : "";
-        return $"{time}{Music.NoteName(n.Pitch)}({Music.DegreeName(n.Pitch)}) → 按[{keyShow}] {sharp}{slot}";
+        return $"{time}{Music.NoteName(n.Pitch)}({Music.DegreeName(n.Pitch)}){fold} → 按[{keyShow}] {sharp}{slot}";
     }
+
+    private static string OctaveLabel(string? key, string fallback)
+        => string.IsNullOrWhiteSpace(key) ? fallback : $"{fallback}(按{key})";
 }

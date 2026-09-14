@@ -1,7 +1,19 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using MidiKeyPlayer.Engine;
 
 namespace MidiKeyPlayer.Persist;
+
+/// <summary>某个键位方案单独记住的速度 / 移调 / 输入兼容档。</summary>
+public sealed class ProfileSettings
+{
+    /// <summary>速度（%）。</summary>
+    public int Speed { get; set; } = 100;
+    /// <summary>移调（半音）。</summary>
+    public int Transpose { get; set; } = 0;
+    /// <summary>输入兼容档位：0 稳健 / 1 标准 / 2 极限。</summary>
+    public int TimingIndex { get; set; } = 1;
+}
 
 /// <summary>用户设置：退出后记住，下次启动自动恢复。</summary>
 public sealed class AppConfig
@@ -18,6 +30,13 @@ public sealed class AppConfig
     public int TimingIndex { get; set; } = 1;         // 输入兼容档位：0稳健/1标准/2极限
     public string SkippedUpdateTag { get; set; } = "";   // 用户选择“跳过”的版本号（空=不跳过）
 
+    // —— 键位方案与和弦 ——
+    public string KeymapName { get; set; } = KeymapProfile.DefaultName;  // 当前键位方案名
+    public bool ChordMode { get; set; } = true;         // 保留和弦（关掉则提取单音线）
+
+    /// <summary>按方案名分别记住的速度 / 移调 / 输入兼容档。键是方案名。</summary>
+    public Dictionary<string, ProfileSettings> PerProfile { get; set; } = new();
+
     // —— MIDI 设备接入（issue #4）——
     public string MidiDeviceName { get; set; } = "";     // 上次用的 MIDI 输入设备名（空=没选过）
     public bool MidiLiveEnabled { get; set; } = false;   // 设备实时演奏开关（默认关，避免误触发）
@@ -25,10 +44,52 @@ public sealed class AppConfig
     public int MidiMinVelocity { get; set; } = 1;        // 力度下限（1 = 不过滤）
     public bool MidiAutoFit { get; set; } = true;        // 自动贴合音域
 
-    private static string DirPath =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MidiKeyPlayer");
+    /// <summary>旧版本程序（HarpAutoPlayer）的设置目录名。</summary>
+    private const string LegacyDirName = "HarpAutoPlayer";
+
+    private static string LocalAppData =>
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+    private static string DirPath => Path.Combine(LocalAppData, "MidiKeyPlayer");
 
     private static string FilePath => Path.Combine(DirPath, "settings.json");
+
+    private static string LegacyFilePath =>
+        Path.Combine(LocalAppData, LegacyDirName, "settings.json");
+
+    // ================= 按方案记忆 =================
+
+    /// <summary>
+    /// 取某个方案单独记住的设置；没有就用当前的全局值当初始值建一条。
+    /// name 为空时按默认方案名算。
+    /// </summary>
+    public ProfileSettings SettingsFor(string? name)
+    {
+        PerProfile ??= new Dictionary<string, ProfileSettings>();
+        string key = string.IsNullOrWhiteSpace(name) ? KeymapProfile.DefaultName : name!;
+        if (!PerProfile.TryGetValue(key, out var s) || s == null)
+        {
+            s = new ProfileSettings
+            {
+                Speed = Speed,
+                Transpose = Transpose,
+                TimingIndex = TimingIndex,
+            };
+            PerProfile[key] = s;
+        }
+        return s;
+    }
+
+    /// <summary>记住某个方案用的速度 / 移调 / 输入档位。</summary>
+    public void RememberProfile(string? name, int speed, int transpose, int timingIndex)
+    {
+        var s = SettingsFor(name);
+        s.Speed = Math.Clamp(speed, 10, 500);
+        s.Transpose = Math.Clamp(transpose, -24, 24);
+        s.TimingIndex = Math.Clamp(timingIndex, 0, 2);
+    }
+
+    // ================= 读盘 / 写盘 =================
 
     public static AppConfig Load()
     {
@@ -42,12 +103,48 @@ public sealed class AppConfig
                 {
                     // 老用户升级：设置文件已存在就不算“首次”，不弹快速上手
                     cfg.FirstRunDone = true;
+                    cfg.PerProfile ??= new Dictionary<string, ProfileSettings>();
                     return cfg;
                 }
             }
         }
         catch (Exception ex) { LogFile.Append("[设置] 读取失败，用默认值：" + ex.Message); }
+
+        // 首次启动（新目录还没有 settings.json）：旧目录有设置就迁移一次
+        if (!existed)
+        {
+            var migrated = TryLoadLegacy();
+            if (migrated != null)
+            {
+                migrated.FirstRunDone = true;
+                migrated.PerProfile ??= new Dictionary<string, ProfileSettings>();
+                migrated.Save();   // 只迁移一次：写进新目录后，下次就走新目录
+                return migrated;
+            }
+        }
         return new AppConfig();
+    }
+
+    /// <summary>读旧目录 HarpAutoPlayer 的设置。字段对不上或读不动都只写日志，返回 null。</summary>
+    private static AppConfig? TryLoadLegacy()
+    {
+        try
+        {
+            if (!File.Exists(LegacyFilePath)) return null;
+            var cfg = JsonSerializer.Deserialize(File.ReadAllText(LegacyFilePath), ConfigJson.Default.AppConfig);
+            if (cfg == null)
+            {
+                LogFile.Append("[设置] 旧目录设置是空的，不迁移。");
+                return null;
+            }
+            LogFile.Append("[设置] 已从旧目录 HarpAutoPlayer 迁移设置（速度、移调、热键、MIDI 等）。");
+            return cfg;
+        }
+        catch (Exception ex)
+        {
+            LogFile.Append("[设置] 旧目录设置迁移失败（忽略，不影响启动）：" + ex.Message);
+            return null;
+        }
     }
 
     public void Save()
@@ -68,9 +165,13 @@ public sealed class AppConfig
 /// 运行时抛异常。而 Save / Load 原先都静默吞掉异常 —— 结果是设置从未写盘，
 /// 表现为「每次启动都弹快速上手」，而且速度、移调、热键全都不记忆。
 /// 源生成在编译期产出读写代码，不依赖反射，裁剪下也正常。
+///
+/// 键位方案（<see cref="KeymapProfile"/>）也一起登记，方案文件与设置走同一套源生成代码。
 /// </summary>
 [JsonSourceGenerationOptions(WriteIndented = true)]
 [JsonSerializable(typeof(AppConfig))]
+[JsonSerializable(typeof(ProfileSettings))]
+[JsonSerializable(typeof(KeymapProfile))]
 internal sealed partial class ConfigJson : JsonSerializerContext
 {
 }

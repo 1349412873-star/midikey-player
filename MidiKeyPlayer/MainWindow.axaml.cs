@@ -1,8 +1,10 @@
 using System.Collections.ObjectModel;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Selection;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using System.Text;
@@ -10,6 +12,8 @@ using MidiKeyPlayer.Engine;
 using MidiKeyPlayer.Input;
 using MidiKeyPlayer.Midi;
 using MidiKeyPlayer.Persist;
+// Avalonia.Input 也有 KeyBinding（手势绑定），这里给键位方案的绑定起个别名，避免歧义
+using KeyBinding = MidiKeyPlayer.Engine.KeyBinding;
 
 namespace MidiKeyPlayer;
 
@@ -54,6 +58,13 @@ public partial class MainWindow : Window
     private string _updateUrl = "";     // 有新版本时的下载页
     private string _updateTag = "";     // 有新版本时的版本号
 
+    // —— 键位方案面板 ——
+    private KeymapProfile _keymap = KeymapProfile.Default;   // 当前活动方案
+    private bool _keymapLoading;      // 面板初始化 / 载入预设中，忽略 *Changed
+    private bool _keyCapturing;       // 正在等用户按一个键来绑定
+    private object? _keyCaptureTarget; // KeyBinding 或 "octaveUp"/"octaveDown"/"sharp"
+    private bool _chordOn = true;     // 和弦开关：勾选 = 多声部合成；关闭 = 只留一条单音线
+
     public MainWindow()
     {
         InitializeComponent();
@@ -89,7 +100,16 @@ public partial class MainWindow : Window
         SliderTranspose.Value = Math.Clamp(_cfg.Transpose, -10, 10);
         ChkTrimLead.IsChecked = _cfg.TrimLead;
         ChkAutoMinimize.IsChecked = _cfg.AutoMinimizeOnPlay;
+        ChkChordMode.IsChecked = _cfg.ChordMode;
         TimingCombo.SelectedIndex = Math.Clamp(_cfg.TimingIndex, 0, 2);
+
+        // 键位方案（Engine\KeymapProfile）：全局活动方案，实时演奏与文件播放共用
+        _keymap = KeymapProfile.Current ?? KeymapProfile.Default;
+        InitKeymapUi();
+        KeyDown += OnWindowPreviewKeyDown;   // 键位录入：先于控件处理按键
+        // 速度 / 移调 / 输入档位按方案名恢复：启动时按当前方案读一次，
+        // 没有记录就用默认值（100% / 0 / 标准）；全局值同步进去，老设置文件照旧兼容
+        ApplyProfileSettings(_keymap.Name);
 
         // MIDI 设备接入（issue #4）
         _livePlay.Timing = InputTiming.FromIndex(TimingCombo.SelectedIndex);
@@ -151,6 +171,7 @@ public partial class MainWindow : Window
         };
 
         UpdateSettingLabels();
+        UpdateVoiceRoles();
         RefreshPreview();
         SetIdleHint();
         UpdateTransportUi();
@@ -381,6 +402,7 @@ public partial class MainWindow : Window
         _cfg.MidiBaseOctave = (int)Math.Round(SliderMidiOctave.Value);
         _cfg.MidiMinVelocity = (int)Math.Round(SliderMidiVelocity.Value);
         _cfg.MidiAutoFit = ChkMidiAutoFit.IsChecked == true;
+        RememberCurrentProfileSettings();   // 速度 / 移调 / 输入档位按方案名同时记一份
         _cfg.Save();
     }
 
@@ -390,6 +412,47 @@ public partial class MainWindow : Window
         TxtSpeed.Text = $"{SliderSpeed.Value:0}%";
         double tr = SliderTranspose.Value;
         TxtTranspose.Text = tr > 0 ? $"+{tr:0}" : $"{tr:0}";
+    }
+
+    // ================= 速度 / 移调 / 输入档位「按键位方案分别记忆」 =================
+    //
+    // 用户要求：每个键位方案单独记住速度、移调、输入兼容档。存储由 AppConfig 负责
+    // （SettingsFor / RememberProfile），这里只做接线：换方案时「先存旧、再读新」。
+    // 全局字段仍然照写（SaveSettings），老设置文件照旧能读。
+
+    /// <summary>把当前速度 / 移调 / 输入档位写回当前方案名下。</summary>
+    private void RememberCurrentProfileSettings()
+    {
+        if (_cfg == null) return;
+        _cfg.RememberProfile(_keymap.Name,
+            (int)SliderSpeed.Value,
+            (int)SliderTranspose.Value,
+            Math.Clamp(TimingCombo.SelectedIndex, 0, 2));
+    }
+
+    /// <summary>
+    /// 按方案名读出速度 / 移调 / 输入档位并应用到界面与内部字段。
+    /// 没有记录时 AppConfig 会按当前全局值建一条，首次启动的全局值就是默认值（100% / 0 / 标准）。
+    /// </summary>
+    private void ApplyProfileSettings(string? profileName)
+    {
+        if (_cfg == null) return;
+        var s = _cfg.SettingsFor(profileName);
+
+        SliderSpeed.Value = Math.Clamp(s.Speed, 50, 200);        // 滑块自身的范围
+        SliderTranspose.Value = Math.Clamp(s.Transpose, -10, 10);
+        TimingCombo.SelectedIndex = Math.Clamp(s.TimingIndex, 0, 2);
+
+        // 档位跟着改：播放引擎与实时演奏都要用新的时序预算
+        var timing = InputTiming.FromIndex(TimingCombo.SelectedIndex);
+        _livePlay.Timing = timing;
+
+        // 全局字段一并同步，保证旧设置文件与旧版本程序读到的还是这套值
+        _cfg.Speed = (int)SliderSpeed.Value;
+        _cfg.Transpose = (int)SliderTranspose.Value;
+        _cfg.TimingIndex = TimingCombo.SelectedIndex;
+
+        UpdateSettingLabels();
     }
 
     private void SpeedChanged(object? sender, Avalonia.Controls.Primitives.RangeBaseValueChangedEventArgs e)
@@ -546,15 +609,18 @@ public partial class MainWindow : Window
         if (note == null) { TxtSeekNote.Text = "—"; return; }
         string name = Music.NoteName(note.Pitch);
         if (!note.InRange) { TxtSeekNote.Text = $"{name} 超音域"; return; }
-        string mods = note.OctaveSlot switch
-        {
-            Slot.Low => "左键+",
-            Slot.High => "右键+",
-            _ => ""
-        };
-        if (note.Sharp) mods += "中键+";
-        TxtSeekNote.Text = $"{name} {Music.DegreeName(note.Pitch)} · {mods}{note.Key}";
+        // 按键与修饰键一律按当前键位方案算，和实际演奏一致
+        _keymap.TryKeyOfPitch(note.Pitch, out string key, out int octaveOffset, out bool sharp);
+        var parts = new List<string>();
+        if (octaveOffset < 0) parts.Add("降八度键+");
+        else if (octaveOffset > 0) parts.Add("升八度键+");
+        if (sharp) parts.Add("升半音键+");
+        parts.Add(string.IsNullOrEmpty(key) ? "（无按键）" : DisplayKey(key));
+        TxtSeekNote.Text = $"{name} {Music.DegreeName(note.Pitch)} · {string.Join("", parts)}";
     }
+
+    /// <summary>按键名显示：逗号写成全角逗号，其余原样。</summary>
+    private static string DisplayKey(string key) => key == "," ? "，" : key;
 
     // ================= 卷帘编辑 =================
 
@@ -1116,6 +1182,7 @@ public partial class MainWindow : Window
         DropEditsIfAny("换了主旋律轨");
         foreach (var r in _tracks) r.IsMain = ReferenceEquals(r, row);
         _selected = row;
+        UpdateVoiceRoles();   // 未勾合奏时主旋律轨就是 0 号色
         RefreshPreview();
     }
 
@@ -1131,6 +1198,111 @@ public partial class MainWindow : Window
         return _selected != null ? new List<TrackRowVM> { _selected } : new List<TrackRowVM>();
     }
 
+    // ================= 声轨颜色一一对应 =================
+    //
+    // 颜色号 = 该轨在这次演奏里的声部序号：勾了「合」按勾选顺序 0 起，否则主旋律轨 = 0。
+    // 左侧列表的文字用它上色，卷帘的音符也用它上色，所以两边一一对应。
+    // 色值只来自 Styles\Theme.axaml 的 BrushVoice0..11；未参与合奏降不透明度，打击乐轨用灰。
+
+    /// <summary>本轨在这次演奏里的声部序号；-1 = 不参与。</summary>
+    private int VoiceIndexOf(TrackRowVM row)
+    {
+        if (!row.IsVoiceActive || row.IsPercussion) return -1;
+        if (row.IsMix)
+        {
+            int i = _mixOrder.IndexOf(row);
+            return i >= 0 ? i : -1;
+        }
+        return ReferenceEquals(row, _selected) ? 0 : -1;
+    }
+
+    /// <summary>重算每行的「参与演奏 / 声部序号」，并按序号写名称列文字颜色。</summary>
+    private void UpdateVoiceRoles()
+    {
+        bool mixing = _mixOrder.Any(r => r.IsMix);
+        foreach (var row in _tracks)
+            row.IsVoiceActive = mixing ? row.IsMix : ReferenceEquals(row, _selected);
+
+        ApplyVoiceBrushes();
+
+        // 卷帘按「音高 → 声部序号」上色，与左侧列表同一个序号
+        Roll.SetVoiceColors(BuildVoiceMap(GetActiveRawNotes()));
+    }
+
+    private void ApplyVoiceBrushes()
+    {
+        foreach (var row in _tracks)
+        {
+            row.VoiceIndex = VoiceIndexOf(row);
+            IBrush brush;
+            double opacity = 1.0;
+            if (row.IsPercussion)
+            {
+                brush = ResourceBrush("BrushTextMuted");
+                opacity = 0.55;                       // 打击乐轨固定灰
+            }
+            else if (row.IsVoiceActive)
+            {
+                brush = ResourceBrush("BrushVoice" + Music.Mod(row.VoiceIndex, PianoRoll.VoiceCount));
+            }
+            else
+            {
+                brush = ResourceBrush("BrushVoice" + Music.Mod(row.VoiceIndex, PianoRoll.VoiceCount));
+                opacity = 0.45;                       // 未参与合奏：降低不透明度
+            }
+            if (brush is SolidColorBrush scb)
+                brush = new SolidColorBrush(scb.Color, opacity);
+            row.VoiceBrush = brush;
+        }
+    }
+
+    /// <summary>按资源名取主题画刷。取不到就用中性文字色，绝不写字面色值。</summary>
+    private static IBrush ResourceBrush(string key)
+    {
+        if (Application.Current?.TryFindResource(key, out var found) == true && found is IBrush b)
+            return b;
+        return NeutralBrush;
+    }
+
+    /// <summary>
+    /// 音高 → 声部序号。同一音高归序号最小的声部（与合奏时「让位给编号小的声部」一致）。
+    /// 单音线（和弦开关关闭）只保留一条线，序号一律 0。
+    /// </summary>
+    private Dictionary<int, int> BuildVoiceMap(IReadOnlyList<RawNote> kept)
+    {
+        var map = new Dictionary<int, int>();
+        if (kept.Count == 0) return map;
+
+        var keep = new HashSet<RawNote>(kept);
+        var rows = ActiveRows();
+        if (rows.Count == 0) return map;
+
+        if (rows.Count == 1)
+        {
+            foreach (var n in rows[0].Candidate.Notes)
+                if (keep.Contains(n) && !map.ContainsKey(n.Pitch)) map[n.Pitch] = 0;
+            return map;
+        }
+
+        if (!_chordOn)
+        {
+            // 提取后的单音线：整条都算 0 号色
+            foreach (var n in kept) map[n.Pitch] = 0;
+            return map;
+        }
+
+        for (int i = 0; i < rows.Count; i++)
+        {
+            foreach (var n in rows[i].Candidate.Notes)
+            {
+                if (!keep.Contains(n)) continue;
+                if (map.TryGetValue(n.Pitch, out int old) && old <= i) continue;
+                map[n.Pitch] = i;
+            }
+        }
+        return map;
+    }
+
     /// <summary>当前谱面：手动编辑过就用编辑结果，否则用自动提取结果。</summary>
     private List<RawNote> GetActiveRawNotes() =>
         _editing ? _editor.Notes.ToList() : ComputeAutoNotes();
@@ -1139,6 +1311,10 @@ public partial class MainWindow : Window
     /// 当前要演奏的音符（未移调）：把勾选的声部按优先级合并成一条单音线。
     /// 「自动提取主旋律 / 人声旋律提取」已移除 —— 它们是黑盒猜测，猜错时用户无从下手；
     /// 现在卷帘可以直接看、直接改，比猜得准。
+    ///
+    /// 「保留和弦」不勾选时：先按合奏顺序合并多轨，再交给 MelodyExtractor 抽一条平滑 skyline 单音线，
+    /// 卷帘只显示留下的音（未保留的音不在返回值里，自然不显示）。
+    /// 固定顺序：原始音 → 提取 → 移调 → NoteMapper.Map。
     /// </summary>
     private List<RawNote> ComputeAutoNotes()
     {
@@ -1148,10 +1324,24 @@ public partial class MainWindow : Window
             _removedLeadSec = 0;
             return new List<RawNote>();
         }
-        var voices = new List<(int Rank, RawNote Note)>();
-        for (int k = 0; k < rows.Count; k++)
-            foreach (var n in rows[k].Candidate.Notes) voices.Add((k + 1, n));  // 1 最优先
-        var merged = NoteMapper.MergeVoicesByPriority(voices);
+
+        List<RawNote> merged;
+        if (_chordOn)
+        {
+            var voices = new List<(int Rank, RawNote Note)>();
+            for (int k = 0; k < rows.Count; k++)
+                foreach (var n in rows[k].Candidate.Notes) voices.Add((k + 1, n));  // 1 最优先
+            merged = NoteMapper.MergeVoicesByPriority(voices);
+        }
+        else
+        {
+            // 先按合奏顺序合并多轨，再抽一条平滑 skyline 单音线；打击乐按通道与轨道名一起排除
+            var voices = new List<(int Rank, string TrackName, RawNote Note)>();
+            for (int k = 0; k < rows.Count; k++)
+                foreach (var n in rows[k].Candidate.Notes) voices.Add((k + 1, rows[k].Name, n));
+            if (voices.Count == 0) return new List<RawNote>();
+            merged = PlaybackEngine.ResolveNotes(voices, chordMode: false);
+        }
 
         // 「去除开头空拍」：整条旋律平移到第一个音从 0 秒开始（开头常有休止）
         if (ChkTrimLead.IsChecked == true)
@@ -1166,6 +1356,21 @@ public partial class MainWindow : Window
             _removedLeadSec = 0;
         }
         return merged;
+    }
+
+    /// <summary>和弦开关变化：写回设置，再刷新谱面与卷帘。</summary>
+    private void ChordMode_Changed(object? sender, RoutedEventArgs e)
+    {
+        _chordOn = ChkChordMode.IsChecked == true;
+        _cfg.ChordMode = _chordOn;
+        ScheduleSave();
+        if (_busy || _previewDeb is null) return;
+        _previewDeb.Stop();
+        DropEditsIfAny("改了和弦开关");
+        RefreshPreview();
+        InsertLog(_chordOn
+            ? "保留和弦：多声部按优先级合成，听感更饱满。"
+            : "已关闭和弦：只保留一条单音线，卷帘只显示被保留的音。");
     }
 
     private MappingResult MapAt(int transpose) =>
@@ -1290,6 +1495,8 @@ public partial class MainWindow : Window
         for (int i = 0; i < _mixOrder.Count; i++) _mixOrder[i].MixRank = i + 1; // 1=主，2=次，3=更次
         foreach (var r in _tracks)
             if (!_mixOrder.Contains(r)) r.MixRank = 0;
+
+        UpdateVoiceRoles();   // 声轨颜色号跟着勾选顺序走
 
         if (_busy || _previewDeb is null) return;
         _previewDeb.Stop();
@@ -1445,6 +1652,402 @@ public partial class MainWindow : Window
     private void AutoMinimize_Changed(object? sender, RoutedEventArgs e)
     {
         ScheduleSave();
+    }
+
+    // ================= 键位方案面板 =================
+    //
+    // 面板不新开窗口：选方案、改主键、改三个功能键、改音域与两条策略，右边是自绘的键位预览图。
+    // 所有改动先落到 _keymap，再写盘（KeymapProfile.Save → %LOCALAPPDATA%\MidiKeyPlayer\keymap.json），
+    // 同时把方案名记到设置里的 KeymapName。载入/保存都走 Engine\KeymapProfile 的静态 API。
+
+    /// <summary>初始化面板：预设列表 + 当前方案 + 数值框。构造期调用一次。</summary>
+    private void InitKeymapUi()
+    {
+        _keymapLoading = true;
+        try
+        {
+            var names = new List<string>();
+            foreach (var p in KeymapProfile.Presets)
+                if (!string.IsNullOrWhiteSpace(p.Name) && !names.Contains(p.Name)) names.Add(p.Name);
+            if (names.Count == 0) names.Add(KeymapProfile.DefaultName);
+            KeymapCombo.ItemsSource = names;
+
+            OutOfRangeCombo.ItemsSource = new List<string> { "丢音（不发声）", "折八度（就近）" };
+            MissingNoteCombo.ItemsSource = new List<string> { "就近吸附", "丢弃" };
+
+            int idx = names.IndexOf(_keymap.Name);
+            KeymapCombo.SelectedIndex = idx >= 0 ? idx : 0;
+        }
+        finally
+        {
+            _keymapLoading = false;
+        }
+        RefreshKeymapUi();
+    }
+
+    /// <summary>把当前方案铺到面板上：按键列表、三个功能键、基准音、音域、两条策略、预览图。</summary>
+    private void RefreshKeymapUi()
+    {
+        if (KeyList == null) return;
+        _keymapLoading = true;
+        try
+        {
+            KeyList.ItemsSource = null;
+            KeyList.ItemsSource = _keymap.Keys;
+
+            BtnOctaveUp.Content = KeyDisplayName(_keymap.OctaveUp);
+            BtnOctaveDown.Content = KeyDisplayName(_keymap.OctaveDown);
+            BtnSharpKey.Content = KeyDisplayName(_keymap.Sharp);
+
+            TxtBaseNote.Text = _keymap.BaseNote.ToString();
+            TxtBaseNoteName.Text = Music.NoteName(Math.Clamp(_keymap.BaseNote, 0, 127));
+            TxtMinNote.Text = _keymap.ResolveMinNote().ToString();
+            TxtMinNoteName.Text = Music.NoteName(Math.Clamp(_keymap.ResolveMinNote(), 0, 127));
+            TxtMaxNote.Text = _keymap.ResolveMaxNote().ToString();
+            TxtMaxNoteName.Text = Music.NoteName(Math.Clamp(_keymap.ResolveMaxNote(), 0, 127));
+
+            OutOfRangeCombo.SelectedIndex = _keymap.OutOfRange == OutOfRangeMode.Fold ? 1 : 0;
+            MissingNoteCombo.SelectedIndex = _keymap.MissingNote == MissingNoteMode.Drop ? 1 : 0;
+
+            int idx = (KeymapCombo.ItemsSource as List<string>)?.IndexOf(_keymap.Name) ?? -1;
+            if (idx >= 0 && KeymapCombo.SelectedIndex != idx) KeymapCombo.SelectedIndex = idx;
+
+            KeymapPreview.SetProfile(_keymap);
+        }
+        finally
+        {
+            _keymapLoading = false;
+        }
+    }
+
+    /// <summary>键名在按钮上的显示：null/空 = 未设置，逗号写成全角逗号。</summary>
+    private static string KeyDisplayName(string? key) =>
+        string.IsNullOrEmpty(key) ? "（未设置）" : DisplayKey(key!);
+
+    /// <summary>换内置预设。</summary>
+    private void KeymapCombo_Changed(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_keymapLoading || !_uiReady) return;
+        string? name = KeymapCombo.SelectedItem as string;
+        if (string.IsNullOrEmpty(name) || name == _keymap.Name) return;
+
+        KeymapProfile? found = KeymapProfile.Presets.FirstOrDefault(p => p.Name == name);
+        if (found == null) return;
+        RememberCurrentProfileSettings();          // 先存旧方案的速度 / 移调 / 输入档位
+        string oldName = _keymap.Name;
+        _keymap = CopyOf(found);   // 不直接改预设定例：复制一份再编辑
+        ApplyKeymap();
+        ApplyProfileSettings(_keymap.Name);        // 再读新方案的值
+        InsertLog($"已换键位方案：{oldName} → {_keymap.Name}（主键 {_keymap.Keys.Count} 个，"
+                  + $"速度 {SliderSpeed.Value:0}%、移调 {SliderTranspose.Value:0}、档位 {TimingCombo.SelectedIndex}）。");
+    }
+
+    /// <summary>复制方案：不直接改预设定例，复制一份再编辑。</summary>
+    private static KeymapProfile CopyOf(KeymapProfile src)
+    {
+        try { return src.Clone(); }
+        catch { return KeymapProfile.Default; }
+    }
+
+    /// <summary>方案变了：写盘 + 通知实时演奏 + 刷新面板与卷帘。</summary>
+    private void ApplyKeymap()
+    {
+        try { _keymap.Save(); }
+        catch (Exception ex) { InsertLog($"键位方案保存失败：{ex.Message}"); }
+        // 实时演奏按设计读 KeymapProfile.Current，这里只换这一个真源，不再往别处复制
+        KeymapProfile.Current = _keymap;
+        if (_cfg != null) _cfg.KeymapName = _keymap.Name;
+        ScheduleSave();
+        RefreshKeymapUi();
+        RefreshPreview();
+    }
+
+    /// <summary>点「主键」按钮：进入录入状态，等用户按一个键。</summary>
+    private void KeyBind_Click(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control c || c.DataContext is not KeyBinding kb) return;
+        BeginKeyCapture(kb);
+    }
+
+    /// <summary>点三个功能键按钮：Tag = up / down / sharp。</summary>
+    private void KeyBindModifier_Click(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control c) return;
+        string tag = c.Tag as string ?? "";
+        if (tag.Length == 0) return;
+        BeginKeyCapture(tag);
+    }
+
+    private void BeginKeyCapture(object target)
+    {
+        _keyCapturing = true;
+        _keyCaptureTarget = target;
+        TxtKeymapHint.Text = "请按一个键来绑定（Esc 取消）";
+    }
+
+    /// <summary>
+    /// 录入按键：挂在 Window 的 KeyDown 上，先于控件处理。
+    /// 不在录入状态就立刻返回，不干扰原有的快捷键与输入框。
+    /// </summary>
+    private void OnWindowPreviewKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (!_keyCapturing) return;
+
+        var key = e.Key;
+        string? label = KeyLabelOf(key);
+        if (label == null)
+        {
+            if (key == Key.Escape)
+            {
+                _keyCapturing = false;
+                _keyCaptureTarget = null;
+                TxtKeymapHint.Text = "";
+                e.Handled = true;
+            }
+            return;   // 修饰键单独按下、或不可绑定的键：继续等
+        }
+
+        e.Handled = true;
+        var target = _keyCaptureTarget;
+        _keyCapturing = false;
+        _keyCaptureTarget = null;
+        TxtKeymapHint.Text = "";
+
+        if (target is KeyBinding kb)
+        {
+            string old = kb.Key;
+            kb.Key = label;
+            ApplyKeymap();
+            InsertLog($"键位已改：{label}（原 {KeyDisplayName(old)}）。");
+            RefreshKeymapUi();
+        }
+        else if (target is string which)
+        {
+            switch (which)
+            {
+                case "up": _keymap.OctaveUp = label; break;
+                case "down": _keymap.OctaveDown = label; break;
+                case "sharp": _keymap.Sharp = label; break;
+            }
+            ApplyKeymap();
+            InsertLog($"功能键已改：{which switch { "up" => "八度上", "down" => "八度下", _ => "升半音" }} = {label}。");
+        }
+    }
+
+    /// <summary>按键 → 键名（与设计文档的键名表一致）。返回 null 表示不绑定这个键。</summary>
+    private static string? KeyLabelOf(Key key)
+    {
+        if (key is >= Key.A and <= Key.Z) return ((char)('A' + (key - Key.A))).ToString();
+        if (key is >= Key.D0 and <= Key.D9) return ((char)('0' + (key - Key.D0))).ToString();
+        if (key is >= Key.NumPad0 and <= Key.NumPad9) return "NumPad" + (key - Key.NumPad0);
+        if (key is >= Key.F1 and <= Key.F12) return "F" + (key - Key.F1 + 1);
+        return key switch
+        {
+            Key.OemComma => ",",
+            Key.OemPeriod => ".",
+            Key.OemSemicolon => ";",
+            Key.OemQuestion => "/",
+            Key.OemMinus => "-",
+            Key.OemPlus => "=",
+            Key.OemOpenBrackets => "[",
+            Key.OemCloseBrackets => "]",
+            Key.OemQuotes => "'",
+            Key.OemPipe => "\\",
+            Key.OemTilde => "`",
+            Key.Space => "Space",
+            Key.PageUp => "PageUp",
+            Key.PageDown => "PageDown",
+            Key.Home => "Home",
+            Key.End => "End",
+            Key.Insert => "Insert",
+            Key.Delete => "Delete",
+            Key.Tab => "Tab",
+            Key.Enter => "Enter",
+            Key.Back => "Back",
+            Key.Up => "Up",
+            Key.Down => "Down",
+            Key.Left => "Left",
+            Key.Right => "Right",
+            _ => null
+        };
+    }
+
+    /// <summary>追加一个键：默认取基准音，偏移 0。</summary>
+    private void KeyAdd_Click(object? sender, RoutedEventArgs e)
+    {
+        _keymap.Keys.Add(new KeyBinding { Key = "", Offset = NextFreeOffset() });
+        ApplyKeymap();
+        InsertLog("已加一键，点它的键帽再按一个键即可绑定。");
+    }
+
+    /// <summary>找一个还没被占用的半音偏移，避免新键和旧键打架。</summary>
+    private int NextFreeOffset()
+    {
+        var used = new HashSet<int>(_keymap.Keys.Select(k => k.Offset));
+        for (int i = 0; i < 12; i++) if (!used.Contains(i)) return i;
+        return Math.Clamp(_keymap.Keys.Count, 0, 11);
+    }
+
+    private void KeyRemove_Click(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control c || c.DataContext is not KeyBinding kb) return;
+        if (_keymap.Keys.Count <= 1)
+        {
+            InsertLog("至少要留一个主键。");
+            return;
+        }
+        _keymap.Keys.Remove(kb);
+        ApplyKeymap();
+        InsertLog("已删除一键。");
+    }
+
+    /// <summary>基准音 / 音域文本框：按回车或失焦时解析。</summary>
+    private void KeymapNumber_KeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        ApplyKeymapNumbers(sender as TextBox);
+        e.Handled = true;
+    }
+
+    /// <summary>离开输入框也解析一次，用户不用记得按回车。</summary>
+    private void KeymapNumber_LostFocus(object? sender, RoutedEventArgs e)
+    {
+        ApplyKeymapNumbers(sender as TextBox);
+    }
+
+    private void ApplyKeymapNumbers(TextBox? box)
+    {
+        if (box == null || _keymapLoading) return;
+        if (!int.TryParse(box.Text, out int v))
+        {
+            InsertLog("请输入 0 ~ 127 之间的整数。");
+            RefreshKeymapUi();
+            return;
+        }
+        v = Math.Clamp(v, 0, 127);
+
+        if (ReferenceEquals(box, TxtBaseNote))
+        {
+            _keymap.BaseNote = v;
+        }
+        else if (ReferenceEquals(box, TxtMinNote))
+        {
+            if (v >= _keymap.ResolveMaxNote())
+            {
+                InsertLog("音域下限必须小于上限。");
+                RefreshKeymapUi();
+                return;
+            }
+            _keymap.MinNote = v;
+        }
+        else if (ReferenceEquals(box, TxtMaxNote))
+        {
+            if (v <= _keymap.ResolveMinNote())
+            {
+                InsertLog("音域上限必须大于下限。");
+                RefreshKeymapUi();
+                return;
+            }
+            _keymap.MaxNote = v;
+        }
+        else
+        {
+            return;
+        }
+        ApplyKeymap();
+    }
+
+    /// <summary>超界策略 / 缺音策略下拉。</summary>
+    private void KeymapPolicy_Changed(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_keymapLoading || !_uiReady) return;
+        _keymap.OutOfRange = OutOfRangeCombo.SelectedIndex == 1 ? OutOfRangeMode.Fold : OutOfRangeMode.Drop;
+        _keymap.MissingNote = MissingNoteCombo.SelectedIndex == 1 ? MissingNoteMode.Drop : MissingNoteMode.Snap;
+        ApplyKeymap();
+    }
+
+    /// <summary>导出当前方案为 JSON 文件。</summary>
+    private async void KeymapExport_Click(object? sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string safe = string.IsNullOrWhiteSpace(_keymap.Name) ? "keymap" : _keymap.Name;
+            foreach (char bad in System.IO.Path.GetInvalidFileNameChars()) safe = safe.Replace(bad, '_');
+            var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = "导出键位方案",
+                SuggestedFileName = safe + ".json",
+                DefaultExtension = "json",
+                FileTypeChoices = new List<FilePickerFileType>
+                {
+                    new("键位方案") { Patterns = new List<string> { "*.json" } }
+                }
+            });
+            if (file == null) return;
+            string? path = file.TryGetLocalPath();
+            if (string.IsNullOrEmpty(path))
+            {
+                InsertLog("导出键位方案失败：拿不到目标路径。");
+                return;
+            }
+            if (!_keymap.TryExportFile(path, out string error))
+            {
+                InsertLog($"导出键位方案失败：{error}");
+                return;
+            }
+            InsertLog($"已导出键位方案：{System.IO.Path.GetFileName(path)}（主键 {_keymap.Keys.Count} 个）");
+        }
+        catch (Exception ex)
+        {
+            InsertLog($"导出键位方案失败：{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>导入方案 JSON。格式不对就弹中文提示，绝不崩。</summary>
+    private async void KeymapImport_Click(object? sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = "导入键位方案",
+                AllowMultiple = false,
+                FileTypeFilter = new List<FilePickerFileType>
+                {
+                    new("键位方案") { Patterns = new List<string> { "*.json" } },
+                    new("所有文件") { Patterns = new List<string> { "*.*" } }
+                }
+            });
+            if (files.Count == 0) return;
+            string? path = files[0].TryGetLocalPath();
+            if (string.IsNullOrEmpty(path))
+            {
+                InsertLog("导入键位方案失败：拿不到文件路径。");
+                return;
+            }
+
+            // 解析与校验都由键位引擎负责，error 里已经是中文原因；失败时不动原有设置
+            if (!KeymapProfile.TryImportFile(path, out KeymapProfile parsed, out string why))
+            {
+                InsertLog($"导入失败：{why} 请选择本程序「导出方案」生成的文件。");
+                return;
+            }
+
+            // 导入后方案名可能变了：同样先存旧方案，再读新方案的速度 / 移调 / 输入档位
+            RememberCurrentProfileSettings();
+            string oldName = _keymap.Name;
+            _keymap = parsed;
+            ApplyKeymap();
+            ApplyProfileSettings(_keymap.Name);
+            InsertLog($"已导入键位方案：{_keymap.Name}（主键 {_keymap.Keys.Count} 个，"
+                      + $"音域 {Music.NoteName(_keymap.ResolveMinNote())} ~ {Music.NoteName(_keymap.ResolveMaxNote())}）。");
+            if (!string.Equals(oldName, _keymap.Name, StringComparison.Ordinal))
+                InsertLog($"方案名已变：{oldName} → {_keymap.Name}，速度 / 移调 / 档位已按新方案恢复。");
+        }
+        catch (Exception ex)
+        {
+            InsertLog($"导入键位方案失败：{ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     // ================= MIDI 设备接入（issue #4） =================
@@ -1635,20 +2238,15 @@ public partial class MainWindow : Window
         TxtMidiStatus.Foreground = MidiInputService.IsListening ? OkBrush : NeutralBrush;
     }
 
+    /// <summary>实时演奏的提示文字：按当前键位方案的键名显示，鼠标键用中文。</summary>
     private static string KeyLabelOf(LiveMapping map)
     {
-        string key = map.Key switch
-        {
-            LiveKey.MouseLeft => "按住左键",
-            LiveKey.MouseRight => "按住右键",
-            LiveKey.MouseSharp => "按住中键",
-            LiveKey.Comma => "，",
-            _ => ((char)('Z' + (int)map.Key)).ToString()
-        };
+        string key = map.KeyLabel;
+        if (string.IsNullOrEmpty(key)) key = "（无按键）";
         var parts = new List<string> { key };
-        if (map.Low) parts.Add("+左键");
-        if (map.High) parts.Add("+右键");
-        if (map.Sharp) parts.Add("+中键");
+        if (map.Low) parts.Add("+降八度键");
+        if (map.High) parts.Add("+升八度键");
+        if (map.Sharp) parts.Add("+升半音键");
         return string.Join("", parts);
     }
 
@@ -1704,6 +2302,9 @@ public partial class MainWindow : Window
 
         var raw = GetActiveRawNotes();
         var m = raw.Count == 0 ? new MappingResult() : NoteMapper.Map(raw, CurrentTranspose, null);
+        // 声轨颜色：左侧列表的文字色与卷帘音符色用同一个序号
+        var voiceMap = BuildVoiceMap(raw);
+        ApplyVoiceBrushes();
 
         // 载入后即可定位：进度条与卷帘按谱面时间摆好（不必先播放）
         _previewNotes = m.Notes;
@@ -1718,6 +2319,7 @@ public partial class MainWindow : Window
         {
             Roll.SetTempo(_parsed.SecondsPerBeat, _parsed.BeatsPerBar);
             Roll.DefaultNoteSeconds = MedianNoteLength();
+            Roll.SetVoiceColors(voiceMap);
             Roll.SetNotes(raw, inRangePitches, totalSec * 1.02 + 0.3, preserveView: keepView);
             Roll.SetTrimInfo(_removedLeadSec);
             Roll.SetPosition(_previewSeconds);
@@ -1727,6 +2329,7 @@ public partial class MainWindow : Window
         {
             // 编辑提交：只同步进度条、音高颜色与读数，卷帘保持自己的视口与选择
             Roll.SetInRangePitches(inRangePitches);
+            Roll.SetVoiceColors(voiceMap);
             SliderProgress.IsEnabled = m.Notes.Count > 0;
             UpdateSeekNote();
         }
@@ -1857,6 +2460,7 @@ public partial class MainWindow : Window
             InsertLog($"已去除开头空拍 {_removedLeadSec:F1} 秒，旋律从第 0 秒开始。");
 
         var engine = new PlaybackEngine();
+        engine.ChordMode = _chordOn;   // 与界面开关一致（谱面已按开关定好）
         _engine = engine;
         engine.Log += s => UiPost(() => InsertLog(s));
         engine.Finished += () => UiPost(OnEngineFinished);
@@ -2001,6 +2605,12 @@ public partial class MainWindow : Window
         ChkAutoMinimize.IsEnabled = !busy;
         BtnPreview.IsEnabled = !busy;
         CountdownCombo.IsEnabled = !busy;
+        // 键位方案在演奏中不换：一轮演奏的按键表在开始时就已经算好
+        ChkChordMode.IsEnabled = !busy;
+        KeymapCombo.IsEnabled = !busy;
+        if (BtnKeymapImport != null) BtnKeymapImport.IsEnabled = !busy;
+        if (BtnKeymapExport != null) BtnKeymapExport.IsEnabled = !busy;
+        if (KeyList != null) KeyList.IsEnabled = !busy;
         // 一键移调 / 导出的可用性统一由 UpdateActionButtons() 决定，这里不再覆盖。
         UpdateActionButtons();
 

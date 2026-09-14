@@ -41,6 +41,8 @@ public sealed class PianoRoll : Control
 
     private List<RawNote> _notes = new();
     private HashSet<int> _inRange = new();
+    /// <summary>音高 → 声轨颜色号。一个音高只归一个颜色号；缺省（用户手加的音）算 0 号。</summary>
+    private Dictionary<int, int> _voiceOfPitch = new();
     private double _total;
     private double _position;
     /// <summary>谱面时间 → 卷帘时间轴的比例（默认 1，试听时按实际总长设置）。</summary>
@@ -59,7 +61,9 @@ public sealed class PianoRoll : Control
     private int _hover = -1;
     private int _hoverKey = -1;
 
-    private GeometryGroup? _barsOk, _barsSkip;
+    private GeometryGroup? _barsSkip;
+    /// <summary>按声轨颜色号分组的可演奏音符几何缓存。声轨各用一色，一眼对得上左侧列表。</summary>
+    private readonly Dictionary<int, GeometryGroup> _barsByVoice = new();
     private double _builtW = -1, _builtH = -1, _builtFrom = double.NaN, _builtTo = double.NaN;
     private int _builtLo = int.MinValue, _builtHi = int.MinValue, _builtCount = -1;
 
@@ -87,7 +91,52 @@ public sealed class PianoRoll : Control
     private static readonly IPen BeatPen = new Pen(new SolidColorBrush(Color.Parse("#DCE4EE")), 1);
     private static readonly IPen BarPen = new Pen(new SolidColorBrush(Color.Parse("#C9D5E3")), 1);
     private static readonly IPen OctavePen = new Pen(new SolidColorBrush(Color.Parse("#E3E9F1")), 1);
-    private static readonly IBrush OkBrush = new SolidColorBrush(Color.Parse("#2E9E5B"));
+    /// <summary>声轨调色板色数（与 Theme.axaml 的 BrushVoice0..11 对齐）。</summary>
+    public const int VoiceCount = 12;
+
+    /// <summary>
+    /// 声轨调色板。色值真源是 Styles\Theme.axaml 的 BrushVoice0..11，
+    /// 这里在首帧从资源字典读取；读不到（设计器里没挂主题）才用文档里的同一批色值兜底。
+    /// </summary>
+    private static IBrush[]? _palette;
+
+    private static IBrush[] Palette()
+    {
+        var cached = _palette;
+        if (cached != null) return cached;
+
+        var list = new IBrush[VoiceCount];
+        var app = Application.Current;
+        for (int i = 0; i < VoiceCount; i++)
+        {
+            IBrush? b = app?.TryFindResource("BrushVoice" + i, out var found) == true
+                ? found as IBrush : null;
+            list[i] = b ?? new SolidColorBrush(Color.Parse(FallbackVoice[i]));
+        }
+        _palette = list;
+        return list;
+    }
+
+    /// <summary>资源字典取不到时的兜底色值（与 Theme.axaml 一致）。</summary>
+    private static readonly string[] FallbackVoice =
+    {
+        "#4EA1FF", "#4ED8A0", "#FFD166", "#F45B69", "#9BD34E", "#5CC8FF",
+        "#FF8A5C", "#C792EA", "#FF6E9C", "#7FE0E8", "#B0A0FF", "#F2A65A"
+    };
+
+    /// <summary>该声轨颜色号对应的画刷。</summary>
+    private static IBrush VoiceBrushOf(int voice)
+    {
+        var p = Palette();
+        int i = voice <= 0 ? 0 : voice % VoiceCount;
+        if (i < 0) i = 0;
+        return p[i];
+    }
+
+    /// <summary>该音高归哪个声轨颜色号（不在表里 = 用户手加的音，算 0 号）。</summary>
+    private int VoiceIndexOf(int pitch) =>
+        _voiceOfPitch.TryGetValue(pitch, out int v) ? v : 0;
+
     private static readonly IBrush SkipBrush = new SolidColorBrush(Color.Parse("#C8D0D9"));
     private static readonly IPen HoverPen = new Pen(new SolidColorBrush(Color.Parse("#8FB4E8")), 1);
     private static readonly IPen SelPen = new Pen(new SolidColorBrush(Color.Parse("#1F6FEB")), 2);
@@ -166,7 +215,29 @@ public sealed class PianoRoll : Control
     }
 
     /// <summary>
-    /// 只更新「哪些音高可演奏」的集合（绿色 / 灰色由此决定）。
+    /// 设置「音高 → 声轨颜色号」。同一音高只保留一个颜色号：高优先级（号小）的声轨胜出，
+    /// 与合奏时"冲突让位给编号小的声部"一致。缺省音高算 0 号。
+    /// 卷帘按这份表上色，所以卷帘里的颜色和左侧列表的声轨颜色一一对应。
+    /// </summary>
+    public void SetVoiceColors(IReadOnlyDictionary<int, int>? pitchToVoice)
+    {
+        _voiceOfPitch = new Dictionary<int, int>();
+        if (pitchToVoice != null)
+        {
+            foreach (var kv in pitchToVoice)
+            {
+                if (kv.Key < 0 || kv.Key > 127) continue;
+                int v = kv.Value < 0 ? 0 : kv.Value;
+                if (_voiceOfPitch.TryGetValue(kv.Key, out int old) && old <= v) continue;
+                _voiceOfPitch[kv.Key] = v;
+            }
+        }
+        EnsureBarsInvalid();
+        InvalidateVisual();
+    }
+
+    /// <summary>
+    /// 只更新「哪些音高可演奏」的集合（由此决定画声轨色还是灰）。缺省音高算 0 号。
     /// 编辑改动音高后必须调用：SetNotes 只在换谱时走，改一个音的音高不会经过它，
     /// 否则颜色会按旧集合算 —— 明明在音域内的新音高会被画成灰色。
     /// </summary>
@@ -431,7 +502,7 @@ public sealed class PianoRoll : Control
     private void EnsureBars()
     {
         var (lo, hi) = PitchRange();
-        if (_barsOk is not null && Math.Abs(_builtW - Bounds.Width) < 0.5
+        if (_barsSkip is not null && Math.Abs(_builtW - Bounds.Width) < 0.5
             && Math.Abs(_builtH - Bounds.Height) < 0.5
             && Math.Abs(_builtFrom - _viewFrom) < 1e-9 && Math.Abs(_builtTo - _viewTo) < 1e-9
             && _builtLo == lo && _builtHi == hi && _builtCount == _notes.Count)
@@ -439,8 +510,9 @@ public sealed class PianoRoll : Control
 
         double rowH = RowH((lo, hi));
         double barH = Math.Max(3, rowH * 0.72);
-        var ok = new GeometryGroup();
+        // 可演奏音按声轨颜色号各建一组几何，超出音域的统一进灰组
         var skip = new GeometryGroup();
+        _barsByVoice.Clear();
         foreach (var n in _notes)
         {
             if (n.End <= n.Start) continue;
@@ -448,9 +520,20 @@ public sealed class PianoRoll : Control
             double x0 = XOf(n.Start), x1 = XOf(n.End);
             double yc = YCenterOf(n.Pitch, (lo, hi));
             var rect = new Rect(x0, yc - barH / 2, Math.Max(2.5, x1 - x0), barH);
-            (_inRange.Contains(n.Pitch) ? ok : skip).Children.Add(new RectangleGeometry(rect));
+
+            if (!_inRange.Contains(n.Pitch))
+            {
+                skip.Children.Add(new RectangleGeometry(rect));
+                continue;
+            }
+            int voice = VoiceIndexOf(n.Pitch);
+            if (!_barsByVoice.TryGetValue(voice, out var g))
+            {
+                g = new GeometryGroup();
+                _barsByVoice[voice] = g;
+            }
+            g.Children.Add(new RectangleGeometry(rect));
         }
-        _barsOk = ok;
         _barsSkip = skip;
         _builtW = Bounds.Width;
         _builtH = Bounds.Height;
@@ -554,9 +637,16 @@ public sealed class PianoRoll : Control
 
     private void DrawNotes(DrawingContext ctx, (int Lo, int Hi) range)
     {
-        // 灰条 = 超出音域（不可演奏），绿条 = 可演奏
+        // 灰条 = 超出音域（不可演奏）；其它每个声轨一个颜色，与左侧列表一一对应
         if (_barsSkip is not null) ctx.DrawGeometry(SkipBrush, null, _barsSkip);
-        if (_barsOk is not null) ctx.DrawGeometry(OkBrush, null, _barsOk);
+        if (_barsByVoice.Count > 0)
+        {
+            int maxVoice = 0;
+            foreach (int v in _barsByVoice.Keys) if (v > maxVoice) maxVoice = v;
+            for (int v = 0; v <= maxVoice; v++)
+                if (_barsByVoice.TryGetValue(v, out var g) && g.Children.Count > 0)
+                    ctx.DrawGeometry(VoiceBrushOf(v), null, g);
+        }
 
         // 拖动中：用底色擦掉原位，再画临时块（不重建几何缓存）
         if (_mode is DragMode.Move or DragMode.ResizeL or DragMode.ResizeR && _dragNow.Count > 0)
@@ -565,7 +655,7 @@ public sealed class PianoRoll : Control
             {
                 ctx.FillRectangle(Bg, RectOf(o.Note.Pitch, o.Note.Start, o.Note.End).Inflate(2));
                 var r = RectOf(o.Pitch, o.Start, o.End);
-                ctx.FillRectangle(_inRange.Contains(o.Pitch) ? OkBrush : SkipBrush, r);
+                ctx.FillRectangle(_inRange.Contains(o.Pitch) ? VoiceBrushOf(VoiceIndexOf(o.Pitch)) : SkipBrush, r);
                 ctx.DrawRectangle(null, SelPen, r);
             }
             return;
@@ -1091,8 +1181,8 @@ public sealed class PianoRoll : Control
     /// <summary>音符集合变了，几何缓存必须失效（否则画面还是旧谱面）。</summary>
     private void EnsureBarsInvalid()
     {
-        _barsOk = null;
         _barsSkip = null;
+        _barsByVoice.Clear();
         _builtCount = -1;
     }
 

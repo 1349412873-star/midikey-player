@@ -132,7 +132,8 @@ public static class MidiLoader
                         Pitch = n.NoteNumber,
                         Start = s,
                         End = e,
-                        Velocity = n.Velocity
+                        Velocity = n.Velocity,
+                        Channel = grp.Key
                     });
                     if (e > fileEndSec) fileEndSec = e;
                 }

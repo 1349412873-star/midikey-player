@@ -7,6 +7,8 @@ public sealed class RawNote
     public double Start { get; init; }     // 起始秒
     public double End { get; init; }       // 结束秒
     public int Velocity { get; init; }
+    /// <summary>MIDI 通道 0..15（9 = 通道 10 = 打击乐）；-1 = 未知。单音提取用它排除打击乐。</summary>
+    public int Channel { get; init; } = -1;
 
     public override string ToString() => $"{Music.NoteName(Pitch)} {Start:F2}s~{End:F2}s";
 }

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using MidiKeyPlayer.Input;
+using MidiKeyPlayer.Midi;
 
 namespace MidiKeyPlayer.Engine;
 
@@ -18,25 +19,34 @@ public sealed class PlaybackEngine : IDisposable
     /// <summary>
     /// 一个待派发的物理输入事件。T 为**音乐时间**（秒，与速度无关）。
     /// 用可变类而非 record，是为了在派发时回填"真正发出的时刻"，供时序诊断使用。
+    /// 音键用字符形式（命名键是私用区哨兵字符），修饰键用键名（鼠标键或键盘键都行）。
     /// </summary>
     private sealed class PhysicalEvent
     {
         public double T;
         public readonly int Kind;
         public readonly char Code;
+        public readonly string Name;
+        public readonly bool IsSharp;      // 修饰键专用：true = 升半音键，false = 八度键
         public readonly bool Down;
         public readonly string Label;
 
-        public PhysicalEvent(double t, int kind, char code, bool down, string label)
+        private PhysicalEvent(double t, int kind, char code, string name, bool isSharp, bool down, string label)
         {
-            T = t; Kind = kind; Code = code; Down = down; Label = label;
+            T = t; Kind = kind; Code = code; Name = name; IsSharp = isSharp; Down = down; Label = label;
         }
+
+        /// <summary>音键事件。</summary>
+        public static PhysicalEvent Key(double t, char code, bool down, string label)
+            => new(t, K_Key, code, "", false, down, label);
+
+        /// <summary>修饰键事件（八度 / 升半音）。</summary>
+        public static PhysicalEvent Modifier(double t, string name, bool sharp, bool down)
+            => new(t, K_Modifier, ' ', name, sharp, down, "");
     }
 
     private const int K_Key = 0;
-    private const int K_MouseLeft = 1;
-    private const int K_MouseRight = 2;
-    private const int K_MouseMiddle = 3;
+    private const int K_Modifier = 1;   // 八度 / 升半音修饰键：具体是键盘键还是鼠标键由键名决定
 
     private readonly object _gate = new();
     private List<PhysicalEvent> _events = new();
@@ -84,6 +94,63 @@ public sealed class PlaybackEngine : IDisposable
     /// <summary>输入时序预算（物理毫秒）。播放中可改，下一轮播放生效。</summary>
     public InputTiming Timing { get; set; } = InputTiming.Standard;
 
+    // ================= 和弦开关与单音提取（第 4 节） =================
+
+    /// <summary>
+    /// 和弦开关：true（默认）= 保留和弦，按声部优先级合并（旧行为，逐字不变）；
+    /// false = 只演奏「平滑 skyline」提取出的单音线。界面可读写。
+    /// </summary>
+    public bool ChordMode { get; set; } = true;
+
+    /// <summary>
+    /// 最近一次 <see cref="ApplyChordMode"/> 定出的、真正会演奏的音符集合。
+    /// 关闭和弦时卷帘只画这些音（未保留的音不在集合里）。
+    /// </summary>
+    public IReadOnlyList<RawNote> PlayedNotes { get; private set; } = Array.Empty<RawNote>();
+
+    /// <summary>
+    /// 按和弦开关把多声部原始音符定成一条谱面（未移调、未映射），顺序固定：原始音 → 提取 → 移调 → Map。
+    /// true：走 <see cref="NoteMapper.MergeVoicesByPriority"/>，即旧行为。
+    /// false：先排除打击乐（通道 10），合并声部后跑 <see cref="MelodyExtractor.Extract"/>，得到严格单音线。
+    /// Rank 越小优先级越高（合奏勾选顺序，1 最优先）。
+    /// </summary>
+    public static List<RawNote> ResolveNotes(IEnumerable<(int Rank, RawNote Note)> voices, bool chordMode)
+    {
+        var list = voices.ToList();
+        if (chordMode)
+            return NoteMapper.MergeVoicesByPriority(list.Select(v => (v.Rank, v.Note)));
+
+        var kept = list.Where(v => !MelodyExtractor.IsPercussion(v.Note, "")).ToList();
+        var merged = NoteMapper.MergeVoicesByPriority(kept.Select(v => (v.Rank, v.Note)));
+        return MelodyExtractor.Extract(merged, excludePercussion: true);
+    }
+
+    /// <summary>
+    /// 同上，但声部带轨道名：关闭和弦时连「轨道名含 drum / perc / 打击」的轨一起排除。
+    /// </summary>
+    public static List<RawNote> ResolveNotes(
+        IEnumerable<(int Rank, string TrackName, RawNote Note)> voices, bool chordMode)
+    {
+        var list = voices.ToList();
+        if (chordMode)
+            return NoteMapper.MergeVoicesByPriority(list.Select(v => (v.Rank, v.Note)));
+
+        var kept = list.Where(v => !MelodyExtractor.IsPercussion(v.Note, v.TrackName)).ToList();
+        var merged = NoteMapper.MergeVoicesByPriority(kept.Select(v => (v.Rank, v.Note)));
+        return MelodyExtractor.Extract(merged, excludePercussion: true);
+    }
+
+    /// <summary>
+    /// 用当前 <see cref="ChordMode"/> 定谱，并把结果记进 <see cref="PlayedNotes"/>。
+    /// 返回的就是「按当前开关真正会演奏的音符集合」。
+    /// </summary>
+    public List<RawNote> ApplyChordMode(IEnumerable<(int Rank, string TrackName, RawNote Note)> voices)
+    {
+        var notes = ResolveNotes(voices, ChordMode);
+        PlayedNotes = notes;
+        return notes;
+    }
+
 #if MIDIKEY_TEST
     /// <summary>
     /// 仅供时序回归测试使用：按指定预算构建事件表。
@@ -119,8 +186,11 @@ public sealed class PlaybackEngine : IDisposable
     /// <summary>对外暴露的调度事件（音乐时间，秒）。用于导出按键表/宏，保证与实际演奏一致。</summary>
     public sealed record ScheduledEvent(double MusicTime, string Kind, char Key, bool Down)
     {
-        /// <summary>便于人读的按键名（逗号显示为「,」）。</summary>
-        public string KeyLabel => Key == ' ' ? "" : (Key == ',' ? "," : Key.ToString());
+        /// <summary>
+        /// 便于人读的按键名。命名键（鼠标键、PageUp 等）在 <see cref="MappedNote.Key"/> 里是私用区哨兵字符，
+        /// 一律不显示；调用方要用键名请读 MappedNote.KeyName。
+        /// </summary>
+        public string KeyLabel => Key == ' ' || Key >= '\uE000' ? "" : (Key == ',' ? "，" : Key.ToString());
     }
 
     /// <summary>按指定时序预算构建"整首曲子"的事件表（不实际发送），与 <see cref="Play"/> 同一套构建逻辑。</summary>
@@ -128,22 +198,39 @@ public sealed class PlaybackEngine : IDisposable
         IReadOnlyList<MappedNote> notes, InputTiming? timing = null, double speed = 1.0)
     {
         var engine = new PlaybackEngine { Timing = timing ?? InputTiming.Standard };
-        var inRange = notes.Where(n => n.InRange).ToList();
-        var (evs, _) = engine.BuildSchedule(inRange, ModState.None);
+        // 谱面已由上游定好（和弦开关/单音提取都在上游），这里不再自己按音域取舍。
+        // 只跳过没有可用按键的音（Key 不是按键字符），免得排出一次空格键。
+        var decided = notes.Where(n => n.Key != ' ' && n.Key != '\0').ToList();
+        var (evs, _) = engine.BuildSchedule(decided, ModState.None);
 
         double safeSpeed = speed <= 0 ? 1.0 : Math.Clamp(speed, 0.1, 5.0);
         var list = new List<ScheduledEvent>(evs.Count);
         foreach (var e in evs)
         {
-            string kind = e.Kind switch
+            char key = e.Code;
+            string kind;
+            if (e.Kind == K_Key)
             {
-                K_Key => "key",
-                K_MouseLeft => "mouse-left",
-                K_MouseRight => "mouse-right",
-                _ => "mouse-middle"
-            };
+                kind = "key";
+            }
+            else if (InputSender.TryMouseButton(e.Name, out var button))
+            {
+                kind = button switch
+                {
+                    InputSender.MouseButton.Left => "mouse-left",
+                    InputSender.MouseButton.Right => "mouse-right",
+                    _ => "mouse-middle"
+                };
+                key = ' ';
+            }
+            else
+            {
+                // 方案把八度/升半音绑在键盘键上（如 PageUp / Shift / O）时按普通按键导出
+                kind = "key";
+                key = KeymapProfile.KeyCharOf(e.Name);
+            }
             // 事件表用音乐时间；除以速度得到实际物理播放时刻（毫秒）
-            list.Add(new ScheduledEvent(e.T / safeSpeed, kind, e.Code, e.Down));
+            list.Add(new ScheduledEvent(e.T / safeSpeed, kind, key, e.Down));
         }
         return list;
     }
@@ -451,31 +538,16 @@ public sealed class PlaybackEngine : IDisposable
                     Probe.OnNoteOff(ev.Code, ev.T);
                 }
                 break;
-            case K_MouseLeft:
+            default:   // K_Modifier：八度键或升半音键，键盘键与鼠标键都走同一个键名入口
                 if (!Silent)
                 {
-                    if (ev.Down) InputSender.MouseDown(InputSender.MouseButton.Left);
-                    else InputSender.MouseUp(InputSender.MouseButton.Left);
+                    if (ev.Down) InputSender.KeyDown(ev.Name);
+                    else InputSender.KeyUp(ev.Name);
                 }
-                _physMods = _physMods with { L = ev.Down };
-                Probe.OnModifier(ev.T, ev.Down);
-                break;
-            case K_MouseRight:
-                if (!Silent)
-                {
-                    if (ev.Down) InputSender.MouseDown(InputSender.MouseButton.Right);
-                    else InputSender.MouseUp(InputSender.MouseButton.Right);
-                }
-                _physMods = _physMods with { R = ev.Down };
-                Probe.OnModifier(ev.T, ev.Down);
-                break;
-            case K_MouseMiddle:
-                if (!Silent)
-                {
-                    if (ev.Down) InputSender.MouseDown(InputSender.MouseButton.Middle);
-                    else InputSender.MouseUp(InputSender.MouseButton.Middle);
-                }
-                _physMods = _physMods with { M = ev.Down };
+                if (ev.IsSharp)
+                    _physSharpKey = ev.Down ? ev.Name : null;
+                else
+                    _physOctKey = ev.Down ? ev.Name : null;
                 Probe.OnModifier(ev.T, ev.Down);
                 break;
         }
@@ -489,19 +561,25 @@ public sealed class PlaybackEngine : IDisposable
 
     // ================= 事件表构建（音乐时间） =================
 
-    /// <summary>修饰键的真实按下状态（避免"我以为按着"与目标程序实际状态不一致）。</summary>
-    private readonly record struct ModState(bool L, bool R, bool M)
+    /// <summary>
+    /// 修饰键的真实按下状态（键名；null = 没按）。避免"我以为按着"与目标程序实际状态不一致。
+    /// 修饰键可以绑键盘键（PageUp / Shift / O）也可以绑鼠标键（MouseLeft …），所以记键名。
+    /// </summary>
+    private readonly record struct ModState(string? OctaveKey, string? SharpKey)
     {
-        public static ModState None => new(false, false, false);
+        public static ModState None => new(null, null);
     }
 
     /// <summary>音键当前是否真的处于按下状态（供停止/跳转后与目标程序对表）。</summary>
     private char _physHeldKey = '\0';
-    private ModState _physMods = ModState.None;
+    /// <summary>当前真实按着的八度修饰键名（null = 没按）。</summary>
+    private string? _physOctKey;
+    /// <summary>当前真实按着的升半音修饰键名（null = 没按）。</summary>
+    private string? _physSharpKey;
 
     private ModState CurrentModifiers()
     {
-        lock (_gate) return _physMods;
+        lock (_gate) return new ModState(_physOctKey, _physSharpKey);
     }
 
     /// <summary>
@@ -511,10 +589,18 @@ public sealed class PlaybackEngine : IDisposable
     private ModState ForceReleaseModifiers()
     {
         InputSender.ReleaseEverything();
-        _physMods = ModState.None;
+        _physOctKey = null;
+        _physSharpKey = null;
         _physHeldKey = '\0';
         Probe.Reset(0);
-        return _physMods;
+        return ModState.None;
+    }
+
+    /// <summary>方案里的键名归一化；空/认不出 → null。</summary>
+    private static string? KeyOrNull(string? keyName)
+    {
+        string name = KeymapProfile.CanonicalKeyName(keyName);
+        return name.Length == 0 ? null : name;
     }
 
     /// <summary>
@@ -551,41 +637,46 @@ public sealed class PlaybackEngine : IDisposable
         double minUpT = frame + 0.001;
 
         // —— 修饰键状态机（起点 = 目标程序侧当前真实状态）——
-        Slot heldSlot = startMods.L ? Slot.Low : startMods.R ? Slot.High : Slot.Mid;
-        bool heldSharp = startMods.M;
-
-        // 起点若同时按着左右键（异常残留），先全部释放
-        if (startMods.L && startMods.R)
-        {
-            evs.Add(new PhysicalEvent(0, K_MouseLeft, ' ', false, ""));
-            evs.Add(new PhysicalEvent(0, K_MouseRight, ' ', false, ""));
-            heldSlot = Slot.Mid;
-        }
+        // 方案里的八度/升半音键可以是键盘键（PageUp / Shift / O），也可以是鼠标键（MouseLeft …）。
+        var profile = KeymapProfile.Current;
+        string? octUpKey = KeyOrNull(profile.OctaveUp);
+        string? octDownKey = KeyOrNull(profile.OctaveDown);
+        string? sharpKey = KeyOrNull(profile.Sharp);
+        string? heldOct = startMods.OctaveKey;
+        string? heldSharp = startMods.SharpKey;
 
         // 起点若还按着音键（上一轮中断残留），先松开
         if (_physHeldKey != '\0')
         {
-            evs.Add(new PhysicalEvent(0, K_Key, _physHeldKey, false, ""));
+            evs.Add(PhysicalEvent.Key(0, _physHeldKey, false, ""));
             _physHeldKey = '\0';
         }
 
-        void EmitModifiers(bool wantL, bool wantR, bool wantM, double modT)
+        void EmitModifiers(string? wantOct, bool wantM, double modT)
         {
-            // 顺序固定：先松开所有不该按的（左、右、中），再按下所有该按的。
+            // 顺序固定：先松开所有不该按的，再按下所有该按的。
             // 这样即便同刻也不依赖排序稳定性，且半音切换时"松"先于"按"。
-            if (heldSlot == Slot.Low && !wantL)
-                evs.Add(new PhysicalEvent(modT, K_MouseLeft, ' ', false, ""));
-            if (heldSlot == Slot.High && !wantR)
-                evs.Add(new PhysicalEvent(modT, K_MouseRight, ' ', false, ""));
-            if (heldSharp && !wantM)
-                evs.Add(new PhysicalEvent(modT, K_MouseMiddle, ' ', false, ""));
+            if (heldOct != null && heldOct != wantOct)
+            {
+                evs.Add(PhysicalEvent.Modifier(modT, heldOct, sharp: false, down: false));
+                heldOct = null;
+            }
+            if (heldSharp != null && !wantM)
+            {
+                evs.Add(PhysicalEvent.Modifier(modT, heldSharp, sharp: true, down: false));
+                heldSharp = null;
+            }
 
-            if (wantL && heldSlot != Slot.Low)
-                evs.Add(new PhysicalEvent(modT, K_MouseLeft, ' ', true, ""));
-            if (wantR && heldSlot != Slot.High)
-                evs.Add(new PhysicalEvent(modT, K_MouseRight, ' ', true, ""));
-            if (wantM && !heldSharp)
-                evs.Add(new PhysicalEvent(modT, K_MouseMiddle, ' ', true, ""));
+            if (wantOct != null && heldOct != wantOct)
+            {
+                evs.Add(PhysicalEvent.Modifier(modT, wantOct, sharp: false, down: true));
+                heldOct = wantOct;
+            }
+            if (wantM && heldSharp == null && sharpKey != null)
+            {
+                evs.Add(PhysicalEvent.Modifier(modT, sharpKey, sharp: true, down: true));
+                heldSharp = sharpKey;
+            }
         }
 
         char? heldKey = null;
@@ -611,9 +702,10 @@ public sealed class PlaybackEngine : IDisposable
             if (heldKey != null && t < heldDownT + minUpT) t = heldDownT + minUpT;
             endT = t + duration;
 
-            bool wantL = n.OctaveSlot == Slot.Low;
-            bool wantR = n.OctaveSlot == Slot.High;
-            bool wantM = n.Sharp;
+            // 本音需要的修饰键状态：八度档位 -1 = 按「降八度」键，+1 = 按「升八度」键，0 = 都不按
+            string? wantOct = n.OctaveOffset < 0 ? octDownKey : (n.OctaveOffset > 0 ? octUpKey : null);
+            bool wantM = n.Sharp && sharpKey != null;   // 方案里没绑升半音键时不可能真的要按
+            bool sharpHeld = heldSharp != null && heldSharp == sharpKey;
 
             // ② 同一根音键的重触发间隔（旧版只给 12ms，短于一帧 → 两音粘连）
             double downT = t;
@@ -637,20 +729,16 @@ public sealed class PlaybackEngine : IDisposable
                 upT = Math.Min(downT, Math.Max(upT, heldDownT + minUpT));   // 至少跨一个帧点，且不越过本音
                 if (upT < heldUpT - 1e-9) Probe.OnMinUpLimited();
 
-                evs.Add(new PhysicalEvent(upT, K_Key, prev, false, ""));
+                evs.Add(PhysicalEvent.Key(upT, prev, false, ""));
                 if (upT > slotStart) slotStart = upT;
                 heldKey = null;
             }
 
             // ④ 修饰键切换：提前 modLead 发出，并保证音键至少晚于一帧
-            if (wantL != (heldSlot == Slot.Low) ||
-                wantR != (heldSlot == Slot.High) ||
-                wantM != heldSharp)
+            if (wantOct != heldOct || wantM != sharpHeld)
             {
                 double modT = Math.Max(0, downT - modLead);
-                EmitModifiers(wantL, wantR, wantM, modT);
-                heldSlot = wantL ? Slot.Low : wantR ? Slot.High : Slot.Mid;
-                heldSharp = wantM;
+                EmitModifiers(wantOct, wantM, modT);
                 if (downT < modT + frame) downT = modT + frame;
             }
 
@@ -663,7 +751,7 @@ public sealed class PlaybackEngine : IDisposable
                 endT += shift;
             }
 
-            evs.Add(new PhysicalEvent(downT, K_Key, n.Key, true,
+            evs.Add(PhysicalEvent.Key(downT, n.Key, true,
                 NoteMapper.Describe(n, withTime: false)));
 #if MIDIKEY_TEST
             TraceSink?.Invoke($"  音 {n.Key} 谱面 {baseStart:F4}→{baseStart + duration:F4} 槽位 {t:F4}→{endT:F4} "
@@ -679,7 +767,7 @@ public sealed class PlaybackEngine : IDisposable
         if (heldKey is char last)
         {
             double upT = Math.Max(heldUpT, heldDownT + minUpT);
-            evs.Add(new PhysicalEvent(upT, K_Key, last, false, ""));
+            evs.Add(PhysicalEvent.Key(upT, last, false, ""));
         }
 
         for (int i = 0; i < evs.Count; i++)

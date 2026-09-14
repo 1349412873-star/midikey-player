@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using MidiKeyPlayer.Engine;
 
 namespace MidiKeyPlayer.Input;
 
@@ -10,6 +11,7 @@ public static class InputSender
     private const int INPUT_MOUSE = 0;
     private const int INPUT_KEYBOARD = 1;
 
+    private const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
     private const uint KEYEVENTF_KEYUP = 0x0002;
     private const uint KEYEVENTF_SCANCODE = 0x0008;
 
@@ -20,7 +22,6 @@ public static class InputSender
     private const uint MOUSEEVENTF_MIDDLEDOWN = 0x0020;
     private const uint MOUSEEVENTF_MIDDLEUP = 0x0040;
     private const uint MAPVK_VK_TO_VSC = 0;
-    private const ushort VK_OEM_COMMA = 0xBC;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct INPUT
@@ -97,26 +98,85 @@ public static class InputSender
 
     public static bool IsSupported => OperatingSystem.IsWindows();
 
-    /// <summary>可模拟的键：Z..M 和逗号“,”（高高音 do）。</summary>
-    private static ushort VkCodeOf(char c)
+    // ---------------------------------------------------------------- 键名 → 虚拟键码
+
+    /// <summary>标点键的虚拟键码（US 布局，与扫描码方式配套）。</summary>
+    private static readonly Dictionary<char, ushort> OemVk = new()
     {
-        if (c is >= 'A' and <= 'Z') return (ushort)c;
-        if (c == ',') return VK_OEM_COMMA;
-        return 0;
+        [','] = 0xBC, ['.'] = 0xBE, [';'] = 0xBA, ['/'] = 0xBF, ['\''] = 0xDE,
+        ['['] = 0xDB, [']'] = 0xDD, ['\\'] = 0xDC, ['-'] = 0xBD, ['='] = 0xBB, ['`'] = 0xC0,
+    };
+
+    /// <summary>命名键的虚拟键码。</summary>
+    private static readonly Dictionary<string, ushort> NamedVk = new(StringComparer.Ordinal)
+    {
+        ["Space"] = 0x20, ["Enter"] = 0x0D, ["Tab"] = 0x09, ["Back"] = 0x08, ["Escape"] = 0x1B,
+        ["Shift"] = 0xA0, ["Ctrl"] = 0xA2, ["Alt"] = 0xA4,
+        ["PageUp"] = 0x21, ["PageDown"] = 0x22, ["Home"] = 0x24, ["End"] = 0x23,
+        ["Insert"] = 0x2D, ["Delete"] = 0x2E,
+        ["Up"] = 0x26, ["Down"] = 0x28, ["Left"] = 0x25, ["Right"] = 0x27,
+        ["F1"] = 0x70, ["F2"] = 0x71, ["F3"] = 0x72, ["F4"] = 0x73, ["F5"] = 0x74, ["F6"] = 0x75,
+        ["F7"] = 0x76, ["F8"] = 0x77, ["F9"] = 0x78, ["F10"] = 0x79, ["F11"] = 0x7A, ["F12"] = 0x7B,
+        ["NumPad0"] = 0x60, ["NumPad1"] = 0x61, ["NumPad2"] = 0x62, ["NumPad3"] = 0x63, ["NumPad4"] = 0x64,
+        ["NumPad5"] = 0x65, ["NumPad6"] = 0x66, ["NumPad7"] = 0x67, ["NumPad8"] = 0x68, ["NumPad9"] = 0x69,
+    };
+
+    /// <summary>要用「扩展键」标志发送的虚拟键码（方向键、翻页、Home/End、Insert/Delete、小键盘除号）。</summary>
+    private static readonly HashSet<ushort> ExtendedVk = new()
+    {
+        0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2D, 0x2E, 0x6F,
+    };
+
+    /// <summary>
+    /// 键名 → 虚拟键码。支持字母、数字、标点、命名键（F1..F12、PageUp、NumPad0..9、Shift 等）。
+    /// 鼠标键与认不出的键名返回 false。
+    /// </summary>
+    public static bool TryVkCode(string? keyName, out ushort vk)
+    {
+        vk = 0;
+        string name = KeymapProfile.CanonicalKeyName(keyName);
+        if (name.Length == 0) return false;
+
+        if (name.Length == 1)
+        {
+            char c = name[0];
+            if (c is >= 'A' and <= 'Z') { vk = c; return true; }
+            if (c is >= '0' and <= '9') { vk = c; return true; }
+            return OemVk.TryGetValue(c, out vk);
+        }
+        return NamedVk.TryGetValue(name, out vk);
     }
 
-    private static void SendKey(bool down, char vkChar)
+    /// <summary>键名 → 鼠标键。不是鼠标键则返回 false。</summary>
+    public static bool TryMouseButton(string? keyName, out MouseButton button)
     {
-        if (!OperatingSystem.IsWindows()) return;
-        ushort vk = VkCodeOf(char.ToUpperInvariant(vkChar));
-        if (vk == 0) return;
+        button = MouseButton.Left;
+        string name = KeymapProfile.CanonicalKeyName(keyName);
+        switch (name)
+        {
+            case "MouseLeft": button = MouseButton.Left; return true;
+            case "MouseRight": button = MouseButton.Right; return true;
+            case "MouseMiddle": button = MouseButton.Middle; return true;
+            default: return false;
+        }
+    }
 
+    /// <summary>字符形式 → 键名（命名键的哨兵字符在这里还原）。</summary>
+    public static string KeyNameOf(char c) => KeymapProfile.NameOfKeyChar(c);
+
+    // ---------------------------------------------------------------- 发送
+
+    private static void SendKeyVk(bool down, ushort vk, bool extended)
+    {
         // 一律发扫描码（wVk=0 + KEYEVENTF_SCANCODE）：很多目标程序/DirectInput 只认扫描码
+        uint flags = (down ? 0u : KEYEVENTF_KEYUP) | KEYEVENTF_SCANCODE;
+        if (extended) flags |= KEYEVENTF_EXTENDEDKEY;
+
         var ki = new KEYBDINPUT
         {
             wVk = 0,
             wScan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC),
-            dwFlags = (down ? 0u : KEYEVENTF_KEYUP) | KEYEVENTF_SCANCODE,
+            dwFlags = flags,
             time = 0,
             dwExtraInfo = IntPtr.Zero
         };
@@ -158,16 +218,55 @@ public static class InputSender
         SendInput(1, new[] { input }, Marshal.SizeOf<INPUT>());
     }
 
-    public static void KeyDown(char c) => SendKey(true, c);
-    public static void KeyUp(char c) => SendKey(false, c);
+    /// <summary>按下一个键。键名可以是方案里的任何键名，也可以是 "MouseLeft" / "MouseRight" / "MouseMiddle"。</summary>
+    public static void KeyDown(string? keyName) => SendKeyByName(keyName, true);
+
+    /// <summary>松开一个键。名字规则同 <see cref="KeyDown(string?)"/>。</summary>
+    public static void KeyUp(string? keyName) => SendKeyByName(keyName, false);
+
+    private static void SendKeyByName(string? keyName, bool down)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        if (TryMouseButton(keyName, out var button)) { SendMouse(button, down); return; }
+        if (!TryVkCode(keyName, out ushort vk)) return;
+        SendKeyVk(down, vk, ExtendedVk.Contains(vk));
+    }
+
+    /// <summary>按下一个键（字符形式）。命名键的哨兵字符会还原成键名。</summary>
+    public static void KeyDown(char c) => SendKeyByChar(c, true);
+
+    /// <summary>松开一个键（字符形式）。</summary>
+    public static void KeyUp(char c) => SendKeyByChar(c, false);
+
+    private static void SendKeyByChar(char c, bool down)
+    {
+        string name = KeyNameOf(c);
+        if (name.Length == 0) return;
+        SendKeyByName(name, down);
+    }
 
     public static void MouseDown(MouseButton b) => SendMouse(b, true);
     public static void MouseUp(MouseButton b) => SendMouse(b, false);
 
-    /// <summary>把所有键/鼠标键抬起，用于停止/暂停时清理状态。</summary>
+    /// <summary>
+    /// 把所有键/鼠标键抬起，用于停止/暂停时清理状态。
+    /// 遍历当前键位方案声明的全部键（含三个功能键），再补发一次旧默认键位与鼠标键兜底。
+    /// </summary>
     public static void ReleaseEverything()
     {
         if (!OperatingSystem.IsWindows()) return;
+
+        var profile = KeymapProfile.Current;
+        foreach (var k in profile.Keys)
+        {
+            if (k == null || string.IsNullOrEmpty(k.Key)) continue;
+            KeyUp(k.Key);
+        }
+        KeyUp(profile.OctaveUp);
+        KeyUp(profile.OctaveDown);
+        KeyUp(profile.Sharp);
+
+        // 兜底：方案换过之后，上一轮按下的旧键也要松开
         foreach (char c in "ZXCVBNM,") KeyUp(c);
         MouseUp(MouseButton.Left);
         MouseUp(MouseButton.Right);

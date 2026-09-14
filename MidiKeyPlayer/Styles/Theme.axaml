@@ -30,6 +30,24 @@
   <SolidColorBrush x:Key="BrushWarn"    Color="#B25A00"/>
   <SolidColorBrush x:Key="BrushDanger"  Color="#C0392B"/>
 
+  <!-- ===================== 声轨配色（12 色，唯一真源） =====================
+       深色底与浅色底上都能读。分配：声轨序号 % 12。
+       左侧列表文字与卷帘音符共用同一号色，声轨一一对应。
+       未参与合奏的声轨由代码降低不透明度，打击乐轨用灰（BrushTextMuted）。
+       卷帘与列表都不写裸色值，一律按序号取这里的资源。 -->
+  <SolidColorBrush x:Key="BrushVoice0"  Color="#4EA1FF"/>
+  <SolidColorBrush x:Key="BrushVoice1"  Color="#4ED8A0"/>
+  <SolidColorBrush x:Key="BrushVoice2"  Color="#FFD166"/>
+  <SolidColorBrush x:Key="BrushVoice3"  Color="#F45B69"/>
+  <SolidColorBrush x:Key="BrushVoice4"  Color="#9BD34E"/>
+  <SolidColorBrush x:Key="BrushVoice5"  Color="#5CC8FF"/>
+  <SolidColorBrush x:Key="BrushVoice6"  Color="#FF8A5C"/>
+  <SolidColorBrush x:Key="BrushVoice7"  Color="#C792EA"/>
+  <SolidColorBrush x:Key="BrushVoice8"  Color="#FF6E9C"/>
+  <SolidColorBrush x:Key="BrushVoice9"  Color="#7FE0E8"/>
+  <SolidColorBrush x:Key="BrushVoice10" Color="#B0A0FF"/>
+  <SolidColorBrush x:Key="BrushVoice11" Color="#F2A65A"/>
+
   <!-- 提示条 -->
   <SolidColorBrush x:Key="BrushDangerSoft"   Color="#FDF1EF"/>
   <SolidColorBrush x:Key="BrushDangerBorder" Color="#F0CFC9"/>
