@@ -40,7 +40,6 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
 
     private KeymapProfile _keymap = KeymapProfile.Default;
     private bool _loading;              // 铺值中，忽略 *Changed
-    private bool _rebuilding;           // 重建列表行中
 
     private readonly ObservableCollection<RowVM> _rows = new();
     /// <summary>按键绑定区的内容：按八度分行，一行一串键帽。</summary>
@@ -65,17 +64,6 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         new[] { "Z", "X", "C", "V", "B", "N", "M" },
         new[] { "A", "S", "D", "F", "G", "H", "J" },
         new[] { "Q", "W", "E", "R", "T", "Y", "U" },
-    };
-
-    private static readonly IReadOnlyList<string> KeyNameChoices = new List<string>
-    {
-        "Shift", "Ctrl", "Alt",
-        "Space", "Enter", "Tab", "Backspace", "Insert", "Delete", "Home", "End", "PageUp", "PageDown",
-        "↑", "↓", "←", "→",
-        "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
-        "小键盘 0", "小键盘 1", "小键盘 2", "小键盘 3", "小键盘 4",
-        "小键盘 5", "小键盘 6", "小键盘 7", "小键盘 8", "小键盘 9",
-        "鼠标左键", "鼠标中键", "鼠标右键",
     };
 
     /// <summary>无参构造只给设计器与 XAML 加载用；实际使用走带回调的那个重载。</summary>
@@ -175,7 +163,7 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
             string octaveLine = json.Split('\n').FirstOrDefault(l => l.Contains("octaveUp", StringComparison.Ordinal)) ?? "(没找到)";
             W($"4) 写进 keymap.json 的那一行：{octaveLine.Trim()}");
 
-            // 绑定区两条主路径：加一行再按一个键、点音名区改音高
+            // 绑定区两条主路径：加一行再按一个键、点方块换绑
             int keysBefore = _keymap.Keys.Count;
             RowAddRow_Click(null, new RoutedEventArgs());
             var pending = _pending;
@@ -188,11 +176,11 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
             W($"6) 按 Q：绑定 {_keymap.Keys.Count} 条，键盘表最后一项 = {_keymap.Keys[^1]}；"
               + $"新键帽 = 「{pending?.KeyCapText}」，等待中 = {pending?.Waiting}");
 
-            string firstLabel = pending?.PitchLabel ?? "";
-            ApplyPitch(pending!, PitchChoices().Last());
-            W($"7) 把它的音高从「{firstLabel}」改成下拉最后一项「{pending?.PitchLabel}」："
-              + $"方案里的偏移 = {pending?.Source?.Offset}，方块文字「{pending?.KeyCapText}」，"
-              + $"大字「{pending?.PitchName}」，小字「{pending?.PitchDegree}」");
+            // 错位核对：屏上每一颗键帽的键名，必须等于它自己 Source 那条键位写在方案里的键名
+            int mismatched = _rows.Count(r => !string.Equals(
+                r.KeyText, DisplayKey(r.Source?.Key), StringComparison.Ordinal));
+            W($"7) 键帽与方案的对应：{_rows.Count} 颗键帽，键名对不上的有 {mismatched} 颗；"
+              + $"屏幕第 1 行 = 「{string.Join(" ", _groups.FirstOrDefault()?.Cells.Select(c => c.KeyText) ?? Array.Empty<string>())}」");
 
             // 收尾：把探针加的这条拆掉，方案回到原样（脚本还会再还原一次 keymap.json）
             RowRemove_Click(new Button { DataContext = pending }, new RoutedEventArgs());
@@ -304,7 +292,6 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
                 Label = labels[i],
                 Key = key,
                 KeyText = DisplayKey(key),
-                KeyChoices = KeyNameChoices,
             });
         }
     }
@@ -315,61 +302,52 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
     /// 重建绑定区：把方案里的键位按**方案自己的行号**（<see cref="KeyBinding.Row"/>）分成一行行，
     /// 每行从左到右按音高升序，行号大的显示在上面。
     /// 所以三套预设都是整整齐齐的三行七列或三行十二列：
-    /// 21 键自然音的第 1 行 = 上排 Q W E R T Y U、第 2 行 = 中排 A S D F G H J、第 3 行 = 下排 Z X C V B N M；
-    /// 36 键半音的第 1 行是高音排（Q 2 W 3 E…），第 3 行是低音排（，L . ; …）。
+    /// 21 键自然音与 21 键半音的第 1 行 = 上排 Q W E R T Y U、第 2 行 = 中排 A S D F G H J、第 3 行 = 下排 Z X C V B N M；
+    /// 第五人格键位的第 1 行是高音排（Q 2 W 3 E…），第 3 行是低音排（，L . ; …）。
     /// 一行内绝不换行（XAML 里用横向 StackPanel + 横向滚动）。
     /// 老方案（所有键的 Row 都是 0）退回「按物理键盘的排分组」。
     /// </summary>
     private void RebuildRows()
     {
-        _rebuilding = true;
-        try
+        _rows.Clear();
+        int n = 1;
+        foreach (var kb in _keymap.Keys.Where(k => k != null && !string.IsNullOrWhiteSpace(k.Key)))
+            _rows.Add(NewRow(kb, n++));
+
+        ApplyDuplicates();
+        var waiting = ActiveRow();
+        if (waiting != null) waiting.Waiting = true;
+
+        // 先算出每颗键帽属于哪一行（键帽自带 Source，所以键位表变了它跟着变）。
+        bool schemeHasRows = _schemeUsesRows = SchemeHasRows();
+        var pairs = _rows
+            .Select(r => (Cell: r, Row: schemeHasRows ? SchemeRowOf(r) : PhysicalRowOf(r.Source?.Key)))
+            .ToList();
+
+        // 行号大的显示在上面：Row 2 在最上、Row 0 在最下。
+        var groups = pairs.GroupBy(p => p.Row).OrderByDescending(g => g.Key).ToList();
+
+        _groups.Clear();
+        int displayNo = 1;
+        foreach (var g in groups)
         {
-            _rows.Clear();
-            int n = 1;
-            foreach (var kb in _keymap.Keys.Where(k => k != null && !string.IsNullOrWhiteSpace(k.Key)))
-                _rows.Add(NewRow(kb, n++));
-
-            ApplyDuplicates();
-            SyncRowPitchChoices();
-            var waiting = ActiveRow();
-            if (waiting != null) waiting.Waiting = true;
-
-            // 先算出每颗键帽属于哪一行（键帽自带 Source，所以键位表变了它跟着变）。
-            bool schemeHasRows = _schemeUsesRows = SchemeHasRows();
-            var pairs = _rows
-                .Select(r => (Cell: r, Row: schemeHasRows ? SchemeRowOf(r) : PhysicalRowOf(r.Source?.Key)))
-                .ToList();
-
-            // 行号大的显示在上面：Row 2 在最上、Row 0 在最下。
-            var groups = pairs.GroupBy(p => p.Row).OrderByDescending(g => g.Key).ToList();
-
-            _groups.Clear();
-            int displayNo = 1;
-            foreach (var g in groups)
+            var cells = g.Select(p => p.Cell).OrderBy(c => c.Pitch).ToList();
+            var group = new KeymapRowGroup
             {
-                var cells = g.Select(p => p.Cell).OrderBy(c => c.Pitch).ToList();
-                var group = new KeymapRowGroup
-                {
-                    RowNumber = displayNo,
-                    SchemeRow = g.Key,
-                };
-                foreach (var c in cells)
-                {
-                    c.Parent = group;
-                    group.Cells.Add(c);
-                }
-                // 标签按分组后的实际内容算，不看物理排
-                group.Label = RowLabelOf(cells, displayNo, groups.Count);
-                _groups.Add(group);
-                displayNo++;
+                RowNumber = displayNo,
+                SchemeRow = g.Key,
+            };
+            foreach (var c in cells)
+            {
+                c.Parent = group;
+                group.Cells.Add(c);
             }
-            Notify(nameof(ShowEmptyHint));
+            // 标签按分组后的实际内容算，不看物理排
+            group.Label = RowLabelOf(cells, displayNo, groups.Count);
+            _groups.Add(group);
+            displayNo++;
         }
-        finally
-        {
-            _rebuilding = false;
-        }
+        Notify(nameof(ShowEmptyHint));
         RaiseStats();
     }
 
@@ -413,25 +391,8 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         Source = kb,
         RowNo = rowNo,
         Pitch = PitchOf(kb),
-        PitchLabel = NoteLabel(PitchOf(kb)),
         KeyText = DisplayKey(kb.Key),
-        KeyChoices = KeyNameChoices,
     };
-
-    /// <summary>每行的音高下拉内容：本方案实际能弹出来的音，格式形如 1(do)。</summary>
-    private void SyncRowPitchChoices()
-    {
-        var choices = PitchChoices();
-        foreach (var row in _rows)
-        {
-            row.PitchChoices = choices;
-            string label = NoteLabel(row.Pitch);
-            if (choices.Contains(label)) row.PitchLabel = label;
-        }
-    }
-
-    private List<string> PitchChoices()
-        => _keymap.ReachablePitches().Select(NoteLabel).ToList();
 
     private int PitchOf(KeyBinding kb) => Math.Clamp(_keymap.BaseNote + kb.Offset, 0, 127);
 
@@ -446,7 +407,7 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
     // ================= 显示名 =================
 
     /// <summary>音高文字：简谱数字加唱名，八度用上下点。例如 1(do)、#4(fa)、1˙(do)。</summary>
-    private static string NoteLabel(int pitch)
+    internal static string NoteLabelOf(int pitch)
         => $"{Music.SolfegeName(pitch)}({SyllableOf(pitch)})";
 
     /// <summary>音高的唱名。简谱带升号时用本位音的唱名，例如 #4 写 fa。</summary>
@@ -456,12 +417,15 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
     private static readonly string[] Syllables =
         { "do", "do", "re", "re", "mi", "fa", "fa", "sol", "sol", "la", "la", "si" };
 
-    /// <summary>键名在按钮上的显示。鼠标键写中文，逗号写全角并加小字「逗号」。</summary>
+    /// <summary>
+    /// 键名在方块上的显示。**每个键名占的宽度必须一样**：方块是固定宽度的，
+    /// 一格里写出「， 逗号」这种长文字，这一行后面的方块就会整体右移，点到的格子与看到的字对不上（错位）。
+    /// 逗号的说明改放进方块按钮的提示气泡（<see cref="RowVM.CapTip"/>）。
+    /// </summary>
     private static string DisplayKey(string? key) => string.IsNullOrEmpty(key) ? "" : DisplayKeyText(key);
 
     private static string DisplayKeyText(string key) => key switch
     {
-        "," => "， 逗号",
         "Escape" => "Esc",
         "Back" => "Backspace",
         "Space" => "Space",
@@ -473,6 +437,23 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         _ => key,
     };
 
+    /// <summary>键名太长时方块里塞不下，提示气泡里用它补一句人话。</summary>
+    internal static string LongNameOf(string key) => key switch
+    {
+        "," => "，逗号",
+        "." => "。句点",
+        ";" => "；分号",
+        "/" => "／斜杠",
+        "-" => "- 减号",
+        "[" => "[ 左方括号",
+        "]" => "] 右方括号",
+        "'" => "' 单引号",
+        "\\" => "\\ 反斜杠",
+        "=" => "= 等号",
+        "`" => "` 反引号",
+        _ => "",
+    };
+
     private void Say(string message)
     {
         if (TxtSchemeHint != null) TxtSchemeHint.Text = message;
@@ -481,15 +462,15 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
 
     /// <summary>
     /// 把当前方案存盘并交回主窗（主窗负责同步设置记忆与卷帘）。
-    /// 自定义方案还要顺手写回 schemes\&lt;方案名&gt;.json：keymap.json 只装活动方案，
-    /// 换方案时会被下一份覆盖，不写这一份改动就永久丢失。内置方案不落用户目录。
+    /// **任何方案都要顺手写回 schemes\&lt;方案名&gt;.json**（内置三套也一样）：
+    /// keymap.json 只装活动方案，换方案时会被下一份覆盖，不写这一份改动就永久丢失。
+    /// 加载时 <see cref="KeymapProfile.LoadByName"/> 先读用户目录的同名文件，读不到才用内置预设。
     /// </summary>
     private void Apply(string message)
     {
         try { _keymap.Save(); }
         catch (Exception ex) { message += $"（方案保存失败：{ex.Message}）"; }
-        // 内置方案不写 schemes 目录（现有约束），导入时名字撞上内置名也一样。
-        if (!IsBuiltIn() && !string.IsNullOrWhiteSpace(_keymap.Name)
+        if (!string.IsNullOrWhiteSpace(_keymap.Name)
             && !WriteSchemeFile(_keymap.Name, out string schemeError))
             message += $"（方案文件没写成：{schemeError}）";
         KeymapProfile.Current = _keymap;
@@ -507,37 +488,45 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
     private RowVM? ActiveRow() => _rows.FirstOrDefault(r => r.Waiting);
     private FuncRowVM? ActiveFuncRow() => _funcs.FirstOrDefault(f => f.Waiting);
 
-    /// <summary>点方块下半（按键区）：进入等待，再按一个键就把这个键绑到这个音。</summary>
+    /// <summary>
+    /// 点键帽方块：进入等待，再按一个键就把这个键绑到这个音。
+    ///
+    /// 定位口径：改哪一个格子，只认按钮自己的 <see cref="RowVM"/>，不看坐标、不看下标。
+    /// 每颗键帽与它的 <see cref="KeyBinding"/> 是一一对应的（<see cref="RowVM.Source"/>），
+    /// 所以「点哪个方块改哪个方块」由数据绑定保证，不经过任何行号 / 下标换算。
+    ///
+    /// 这里先 <see cref="EndWaiting"/>：它可能撤掉上一颗「+」加出来还没落键的格子，并重建列表。
+    /// 重建会把 <see cref="RowVM"/> 换成新对象，所以按钮上带着的那个可能已经过时 ——
+    /// 按 <see cref="RowVM.Source"/> 在活列表里找回现在代表这条键位的那一颗再进等待。
+    /// </summary>
     private void BlockKey_Click(object? sender, RoutedEventArgs e)
     {
         if (sender is not Control c || c.DataContext is not RowVM row) return;
-        BeginWait(row);
-        e.Handled = true;   // 不要让这次点击冒到窗口，被当成「点别处」
-    }
-
-    /// <summary>点方块上半（音名区）：开一个音高下拉，选完立刻改音高。</summary>
-    private void BlockPitch_Click(object? sender, RoutedEventArgs e)
-    {
-        if (sender is not Control c || c.DataContext is not RowVM row) return;
         e.Handled = true;
+
+        var source = row.Source;
         EndWaiting(false);
 
-        var list = new ListBox
+        if (source == null)
         {
-            ItemsSource = PitchChoices(),
-            SelectedItem = row.PitchLabel,
-            MinWidth = 120,
-            MaxHeight = 260,
-            FontSize = 12.5,
-        };
-        var flyout = new Flyout { Content = list, Placement = PlacementMode.Bottom };
-        list.SelectionChanged += (_, _) =>
+            // 这一格还没落键（「+」刚加出来的）：重建后它已经不在列表里
+            if (!_rows.Contains(row))
+            {
+                Say("界面已经刷新，请再点一次。");
+                return;
+            }
+        }
+        else
         {
-            if (list.SelectedItem is not string label) return;
-            flyout.Hide();
-            ApplyPitch(row, label);
-        };
-        flyout.ShowAt(c);
+            var live = _rows.FirstOrDefault(r => ReferenceEquals(r.Source, source));
+            if (live == null)
+            {
+                Say("界面已经刷新，请再点一次。");
+                return;
+            }
+            row = live;
+        }
+        BeginWait(row);
     }
 
     /// <summary>点功能键的键帽：进入等待。</summary>
@@ -684,7 +673,14 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         CommitKey(label);
     }
 
-    /// <summary>窗口级指针录入：等待中按鼠标键就绑上。点在正在等待的按钮本身上不算。</summary>
+    /// <summary>
+    /// 窗口级指针录入：等待中在**空白处**按鼠标键就绑上。
+    ///
+    /// 点在任何一个按钮里（键帽方块、功能键按钮、「✕」、「+」）都不在这里处理，交给那个按钮自己的
+    /// 点击事件。这是「点哪个方块改哪个方块」的第二半：
+    /// 早先这里会把鼠标键当成绑定键落下去，再触发按钮的 Click，一次点击变成两件事 ——
+    /// 刚绑上的那格立刻被重建成「等待按键」，而用户以为是旁边那格变了。
+    /// </summary>
     private void Window_PointerPressed(object? sender, PointerPressedEventArgs e)
     {
         if (ActiveRow() == null && ActiveFuncRow() == null) return;
@@ -702,33 +698,15 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         // 鼠标一点，之前按下的修饰键就不算「单独按一下」了
         CancelModifierTap();
 
-        // 点「选键名」链接、或者点已经打开的键名下拉：不算绑鼠标键
-        if (IsKeyNameUx(e.Source as Visual)) return;
-
-        // 再点一次正在等待的那个按钮 = 取消
-        if (e.Source is Visual v && v.FindAncestorOfType<Button>(true) is { DataContext: RowVM r1 } && r1.Waiting)
-        {
-            EndWaiting(false);
-            Say("已取消。");
-            return;
-        }
-        if (e.Source is Visual v2 && v2.FindAncestorOfType<Button>(true) is { DataContext: FuncRowVM r2 } && r2.Waiting)
-        {
-            EndWaiting(false);
-            Say("已取消。");
-            return;
-        }
+        // 点在按钮上：不是「按了一个鼠标键」，由那个按钮自己的 Click 处理
+        if (IsInsideButton(e.Source as Visual)) return;
 
         CommitKey(label);
     }
 
-    /// <summary>点在键帽按钮或键名下拉自身时，不要当成「点别处」。</summary>
-    private static bool IsKeyNameUx(Visual? source)
-    {
-        if (source == null) return false;
-        if (source.FindAncestorOfType<Button>(true) is not null) return true;
-        return source.FindAncestorOfType<ComboBox>(true) is not null;
-    }
+    /// <summary>点在任意按钮内部（键帽方块、功能键按钮、解绑「✕」、加音「+」）时为真。</summary>
+    private static bool IsInsideButton(Visual? source)
+        => source != null && source.FindAncestorOfType<Button>(true) is not null;
 
     /// <summary>落下这个键：主键行写 Key，功能键行写 up / down / sharp。</summary>
     private void CommitKey(string label)
@@ -763,24 +741,27 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         // 同一个键在别的行上已经用过：按需求允许并存，只给提示，不阻止保存
         var same = _rows.Where(r => r != row && string.Equals(r.Source?.Key, canonical, StringComparison.OrdinalIgnoreCase)).ToList();
 
-        if (row.Source == null)
+        var source = row.Source;
+        if (source == null)
         {
-            var kb = new KeyBinding
+            // 老方案整份退回物理排分组时不能只给新键写行号，否则一按就跳成「有行号」的方案。
+            source = new KeyBinding
             {
                 Key = canonical,
                 Offset = row.Pitch - _keymap.BaseNote,
-                // 老方案整份退回物理排分组时不能只给新键写行号，否则一按就跳成「有行号」的方案。
                 Row = _schemeUsesRows ? row.Parent?.SchemeRow ?? 0 : 0,
             };
-            _keymap.Keys.Add(kb);
-            row.Source = kb;
+            _keymap.Keys.Add(source);
         }
         else
         {
-            row.Source.Key = canonical;
+            source.Key = canonical;
         }
-        row.KeyText = DisplayKeyText(canonical);
-        RebuildRows();     // 新落地的这条要按音高排回队伍里
+        // RebuildRows 会按方案重造一遍 RowVM。这里按 Source 找回「现在屏上代表这条键位」的那一颗，
+        // 只改它的文字。不改旧对象：旧对象已经不在界面上，改了也看不见（内容与位置就不同步了）。
+        RebuildRows();
+        var live = _rows.FirstOrDefault(r => ReferenceEquals(r.Source, source));
+        if (live != null) live.KeyText = DisplayKeyText(canonical);
         Apply($"{Music.SolfegeName(row.Pitch)} 已绑到 {DisplayKeyText(canonical)}"
               + (same.Count > 0 ? "。这个键还绑在别的音上，两个音都会响。" : "。"));
     }
@@ -922,9 +903,6 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
     {
         RowNo = _rows.Count + 1,
         Pitch = pitch,
-        PitchLabel = NoteLabel(pitch),
-        KeyText = "",
-        KeyChoices = KeyNameChoices,
         Source = null,
     };
 
@@ -955,40 +933,6 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         _rows.Remove(row);
         row.Parent?.Cells.Remove(row);
         RebuildRows();
-    }
-
-    /// <summary>把某一行的音高改成下拉里选中的那个。音高变了分组也要跟着重排。</summary>
-    private void ApplyPitch(RowVM row, string label)
-    {
-        if (_loading || _rebuilding) return;
-
-        int pitch = PitchOfLabel(label, row.Pitch);
-        if (pitch == row.Pitch && row.Source != null) return;
-
-        if (row.Source != null)
-        {
-            row.Source.Offset = pitch - _keymap.BaseNote;
-            row.Pitch = pitch;
-            Apply($"{DisplayKeyText(row.Source.Key)} 的音高已改到 {Music.SolfegeName(pitch)}。");
-        }
-        else
-        {
-            row.Pitch = pitch;
-        }
-        RebuildRows();
-    }
-
-    /// <summary>把下拉里的「1(do)」换回音高数字。简谱与旧写法的音名都认；解析不出来就保持原值。</summary>
-    private static int PitchOfLabel(string label, int fallback)
-    {
-        int i = label.IndexOf('(');
-        string name = (i > 0 ? label[..i] : label).Trim();
-        for (int p = 0; p <= 127; p++)
-            if (string.Equals(Music.SolfegeNames[p], name, StringComparison.Ordinal)) return p;
-        // 老配置文件或手输的音名也照旧认，别把这条能力删掉
-        for (int p = 0; p <= 127; p++)
-            if (string.Equals(Music.NoteName(p), name, StringComparison.Ordinal)) return p;
-        return fallback;
     }
 
     // ================= 功能键开关 =================
@@ -1033,38 +977,8 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         }
         row.Key = "";
         row.KeyText = "";
-        Apply($"「{row.Label}」已设为未设置。");
+        Apply($"「{row.Label}」已设为未绑。");
     }
-
-    // ================= 选键名 =================
-
-    private void KeyName_Changed(object? sender, SelectionChangedEventArgs e)
-    {
-        if (sender is not ComboBox c || c.SelectedItem is not string label) return;
-        if (_loading || _rebuilding) return;
-
-        string canonical = InternalKeyName(label);
-        if (canonical.Length == 0) return;
-
-        // ComboBox 自身不会重复触发：选完立刻复位，下次还是「选键名」
-        c.SelectedItem = null;
-        CommitKey(canonical);
-        e.Handled = true;
-    }
-
-    /// <summary>中文显示名换回方案里的键名。</summary>
-    private static string InternalKeyName(string label) => label switch
-    {
-        "↑" => "Up",
-        "↓" => "Down",
-        "←" => "Left",
-        "→" => "Right",
-        "鼠标左键" => "MouseLeft",
-        "鼠标中键" => "MouseMiddle",
-        "鼠标右键" => "MouseRight",
-        _ when label.StartsWith("小键盘 ", StringComparison.Ordinal) => "NumPad" + label[4..],
-        _ => label,
-    };
 
     // ================= 方案管理 =================
 
@@ -1243,8 +1157,12 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         try
         {
             EndWaiting(false);
+            // 内置方案现在也会把改动存进 schemes 目录，所以「恢复」必须把那份额外的文件一起覆盖掉，
+            // 否则重启后又会读回改过的键位。提示里就此说明一句。
             bool ok = await Confirm("恢复默认设置",
-                "把当前方案的键位与功能键改回初始值？你的其他方案不受影响。", "恢复", danger: false);
+                "把当前方案的键位与功能键改回内置键位？"
+                + "这个方案在 schemes 目录里存的改动会被覆盖，你的其他方案不受影响。",
+                "恢复", danger: false);
             if (!ok) return;
 
             string keepName = _keymap.Name;
@@ -1256,7 +1174,7 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
             fresh.Name = keepName;
             _keymap = fresh;
             KeymapProfile.Current = _keymap;
-            Apply($"「{keepName}」已恢复默认设置。");
+            Apply($"「{keepName}」已改回内置键位（名称不变）。");
             RefreshUi();
         }
         catch (Exception ex)
@@ -1344,10 +1262,11 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
             if (!string.Equals(oldName, _keymap.Name, StringComparison.Ordinal))
                 msg += $"。方案名已变：{oldName} → {_keymap.Name}";
             if (!string.IsNullOrEmpty(extra)) msg += "。" + extra;
-            // 名字撞上内置方案时 schemes 目录不能写（内置方案不可覆盖），导入的键位只能留在当前会话
+            // 名字撞上内置方案时，这一份会覆盖内置方案在 schemes 目录里的用户版本（名字只有一个）
             if (KeymapProfile.IsBuiltInSchemeName(_keymap.Name))
-                msg += "。注意：这是内置方案名，导入的键位不会单独存盘；要保留请先「新建方案…」再导入。";
-            Apply(msg);   // Apply 里会把自定义方案写回 schemes\<方案名>.json，切走再切回来还在
+                msg += "。注意：这是内置方案名，导入的键位会当成这套方案的改动存进 schemes 目录，"
+                     + "「恢复默认设置」可以退回内置键位。要另存一份请先「新建方案…」再导入。";
+            Apply(msg);   // Apply 会把任何方案都写回 schemes\<方案名>.json，切走再切回来还在
         }
         catch (Exception ex)
         {
@@ -1358,8 +1277,8 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
     // ================= 方案文件 =================
     //
     // 目录与文件名的规则都在引擎里（KeymapProfile.SchemeFilePath），这里只负责读写与删。
-    // 活动方案永远是 keymap.json；自定义方案（含导入的）每次改动都由 Apply 顺手写一份
-    // schemes\<方案名>.json，换方案后还读得回来。内置方案不写用户目录。
+    // 活动方案永远是 keymap.json；**任何方案**（含内置三套）每次改动都由 Apply 顺手写一份
+    // schemes\<方案名>.json。加载时 KeymapProfile.LoadByName 先读它，读不到才用内置预设。
 
     /// <summary>把方案名整理成能当文件名的样子：去掉两端空格与非法字符。</summary>
     private static string SanitizeSchemeName(string? want)
@@ -1665,6 +1584,22 @@ internal abstract class KeyCapRow : INotifyPropertyChanged
     /// <summary>未设置的键帽用次要文字色，一眼能看出「这里还没绑」。</summary>
     public IBrush? KeyCapForeground => FindBrush(IsEmpty ? "BrushTextMuted" : "BrushText");
 
+    /// <summary>
+    /// 键帽的提示气泡。方块只有 76 宽，逗号 / 句点这类键名写不下全称，
+    /// 全称放在这里（<see cref="KeymapWindow.LongNameOf"/>）。等待态不改提示语。
+    /// </summary>
+    public string CapTip
+    {
+        get
+        {
+            if (_keyText.Length == 0) return "点这个方块，再按一个键，就把这个键绑到这个音。";
+            string extra = KeymapWindow.LongNameOf(_keyText);
+            return extra.Length > 0
+                ? $"当前绑的是 {extra}。点一下再按一个键就能换绑。"
+                : "点这个方块，再按一个键，就把这个键绑到这个音。";
+        }
+    }
+
     /// <summary>等待态描边加粗一档。</summary>
     public Thickness WaitBorderThickness => Waiting ? new Thickness(2) : new Thickness(0);
 
@@ -1726,28 +1661,14 @@ internal sealed class RowVM : KeyCapRow
         {
             if (!Set(ref _pitch, value)) return;
             Raise(nameof(PitchName));
-            Raise(nameof(PitchDegree));
         }
     }
 
-    public IReadOnlyList<string> PitchChoices { get; set; } = Array.Empty<string>();
-    public IReadOnlyList<string> KeyChoices { get; set; } = Array.Empty<string>();
-
-    /// <summary>方块左上角的大字：简谱音高，例如 1 或 1˙。</summary>
+    /// <summary>方块上的大字：简谱音高，例如 1 或 1˙。数字上下的点表示八度。</summary>
     public string PitchName => Music.SolfegeName(_pitch);
 
-    /// <summary>大字下面的小字：简谱加唱名，例如 1(do)。</summary>
-    /// <summary>方块里的小字：只写唱名。大字已经是简谱音高，这里再写一遍音高就重复了。</summary>
-    public string PitchDegree => $"({SyllableOf(_pitch)})";
-
-    private static readonly string[] Syllables =
-        { "do", "do", "re", "re", "mi", "fa", "fa", "sol", "sol", "la", "la", "si" };
-
-    private static string SyllableOf(int pitch) => Syllables[Music.Mod(pitch, 12)];
-
-    private string _pitchLabel = "";
-    /// <summary>音高下拉里的写法，形如「1(do)」。</summary>
-    public string PitchLabel { get => _pitchLabel; set => Set(ref _pitchLabel, value); }
+    /// <summary>报告与诊断用的音高文字，形如「1(do)」。方块里不再显示唱名。</summary>
+    public string PitchLabel => KeymapWindow.NoteLabelOf(_pitch);
 
     private bool _duplicate;
     /// <summary>同一个物理键绑到了多个音：方块描红边提醒。</summary>
@@ -1818,11 +1739,10 @@ internal sealed class KeymapRowGroup : INotifyPropertyChanged
     }
 }
 
-/// <summary>一行功能键。</summary>
+/// <summary>一行功能键。绑法与键帽一样：点一下，再按一个键。</summary>
 internal sealed class FuncRowVM : KeyCapRow
 {
     public string Tag { get; set; } = "";
     public string Label { get; set; } = "";
     public string Key { get; set; } = "";
-    public IReadOnlyList<string> KeyChoices { get; set; } = Array.Empty<string>();
 }

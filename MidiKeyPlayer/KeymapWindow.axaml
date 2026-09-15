@@ -44,16 +44,23 @@
       <Setter Property="Cursor" Value="Hand"/>
     </Style>
 
-    <!-- 键帽方块里三块「看不见的按钮」：平时不画底色，只有悬停时给一点提示 -->
-    <Style Selector="Button.capZone /template/ ContentPresenter#PART_ContentPresenter">
+    <!-- 键帽方块：整块就是一个按钮，点哪里都是「改这个键的绑定」。 -->
+    <Style Selector="Button.capBlock">
+      <Setter Property="HorizontalContentAlignment" Value="Left"/>
+      <Setter Property="VerticalContentAlignment" Value="Top"/>
+      <Setter Property="Padding" Value="6,3,16,0"/>
+      <Setter Property="Cursor" Value="Hand"/>
+    </Style>
+    <!-- 平时不画底色，只有悬停 / 按下时给一点提示；虚线描边由按钮自己承担 -->
+    <Style Selector="Button.capBlock /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="Transparent"/>
       <Setter Property="BorderThickness" Value="0"/>
-      <Setter Property="CornerRadius" Value="6"/>
+      <Setter Property="CornerRadius" Value="8"/>
     </Style>
-    <Style Selector="Button.capZone:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Style Selector="Button.capBlock:pointerover /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="{DynamicResource BrushAccentSoft}"/>
     </Style>
-    <Style Selector="Button.capZone:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Style Selector="Button.capBlock:pressed /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="{DynamicResource BrushAccentSoft}"/>
     </Style>
     <Style Selector="Button.capClose /template/ ContentPresenter#PART_ContentPresenter">
@@ -68,13 +75,17 @@
       <Setter Property="Foreground" Value="{DynamicResource BrushDanger}"/>
     </Style>
 
-    <!-- 行尾与行尾下方的「+」：虚线画在 Border/Rectangle 上，按钮本体透明 -->
+    <!-- 行尾与行下的「+」：整个方框都是点击区。
+         虚线画在按钮自己的 BorderBrush 上，不要另放 Rectangle：按钮本体必须占满方框。 -->
     <Style Selector="Button.rowPlus">
       <Setter Property="HorizontalContentAlignment" Value="Center"/>
       <Setter Property="VerticalContentAlignment" Value="Center"/>
-      <Setter Property="Padding" Value="0,0,0,0"/>
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="FontSize" Value="{DynamicResource FontTitle}"/>
       <Setter Property="Foreground" Value="{DynamicResource BrushTextSecondary}"/>
       <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource BrushBorderStrong}"/>
     </Style>
     <Style Selector="Button.rowPlus /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="Transparent"/>
@@ -83,6 +94,12 @@
     </Style>
     <Style Selector="Button.rowPlus:pointerover /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="{DynamicResource BrushAccentSoft}"/>
+    </Style>
+    <Style Selector="Button.rowPlus:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource BrushAccentSoft}"/>
+    </Style>
+    <Style Selector="Button.rowPlusWide">
+      <Setter Property="FontSize" Value="{DynamicResource FontCaption}"/>
     </Style>
   </Window.Styles>
 
@@ -137,7 +154,13 @@
         <!-- ============ 2. 按键绑定：一行一行排，行内不换行 ============ -->
         <Border Classes="card">
           <StackPanel Spacing="6">
-            <TextBlock Text="按键绑定" Classes="sectionLabel" FontWeight="SemiBold"/>
+            <!-- 标题右边一句说明：键帽上不再写唱名，八度只靠上下点表示 -->
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <TextBlock Text="按键绑定" Classes="sectionLabel" FontWeight="SemiBold"
+                         VerticalAlignment="Center"/>
+              <TextBlock Classes="caption" VerticalAlignment="Center"
+                         Text="数字上方的点 = 高音，下方的点 = 低音"/>
+            </StackPanel>
 
             <!-- 一条绑都没有时的灰字说明。加行按钮只留下面那一个（曾经这里还有一个「+ 新建第一行」，与它重复） -->
             <TextBlock Classes="caption" TextWrapping="Wrap" IsVisible="{Binding ShowEmptyHint}"
@@ -148,10 +171,11 @@
                 <DataTemplate>
                   <StackPanel Spacing="2" Margin="0,0,0,6">
                     <TextBlock Text="{Binding Label}" Classes="caption"/>
-                    <!-- 一行键帽：横向滚动，绝不换行 -->
-                    <Grid ColumnDefinitions="*,Auto">
-                      <ScrollViewer Grid.Column="0" HorizontalScrollBarVisibility="Auto"
-                                    VerticalScrollBarVisibility="Disabled">
+                    <!-- 一行键帽 + 行尾「+」：横向滚动，绝不换行。
+                         「+」就在最后一个键帽的正右边（同一个横向容器里），不是另起一列。 -->
+                    <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                  VerticalScrollBarVisibility="Disabled">
+                      <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
                         <ItemsControl ItemsSource="{Binding Cells}" HorizontalAlignment="Left">
                           <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
@@ -161,31 +185,28 @@
                           <ItemsControl.ItemTemplate>
                             <DataTemplate>
                               <Grid Width="76" Height="58" Margin="0,0,6,0">
-                                <!-- 一个已绑定的音 = 一个键帽方块 -->
-                                <Border Background="{DynamicResource BrushSurface}"
+                                <!-- 整块键帽就是一个按钮：点方块的任何位置都进入「按一个键」等待态。
+                                     大字是音高（数字上下的点表示八度），下沿是当前绑的键名。
+                                     等待中按钮内容换成「按一个键…」。右上角只留解绑的「✕」。 -->
+                                <Border CornerRadius="8" BoxShadow="0 1 2 0 #140F1729"
+                                        Background="{DynamicResource BrushSurface}"
                                         BorderBrush="{Binding BlockBorderBrush}"
-                                        BorderThickness="{Binding BlockBorderThickness}"
-                                        CornerRadius="8" BoxShadow="0 1 2 0 #140F1729">
+                                        BorderThickness="{Binding BlockBorderThickness}">
                                   <Grid>
-                                    <!-- 上半：音名区。点一下开音高下拉 -->
-                                    <Button Classes="capZone" Click="BlockPitch_Click" VerticalAlignment="Top"
-                                            Height="26" HorizontalContentAlignment="Left" Padding="6,2,16,0"
-                                            ToolTip.Tip="点上半块改这个键弹的音高">
-                                      <StackPanel Spacing="0">
-                                        <TextBlock Text="{Binding PitchName}" FontSize="{DynamicResource FontSmall}"
-                                                   FontWeight="SemiBold" Foreground="{DynamicResource BrushText}"/>
-                                        <TextBlock Text="{Binding PitchDegree}" FontSize="{DynamicResource FontMicro}"
-                                                   Foreground="{DynamicResource BrushTextMuted}"/>
-                                      </StackPanel>
+                                    <Button Classes="capBlock" Click="BlockKey_Click"
+                                            BorderBrush="{DynamicResource BrushBorderStrong}"
+                                            BorderThickness="1" CornerRadius="8" Padding="6,3,6,4"
+                                            ToolTip.Tip="{Binding CapTip}">
+                                      <Grid RowDefinitions="*,Auto">
+                                        <TextBlock Grid.Row="0" Text="{Binding PitchName}" VerticalAlignment="Top"
+                                                   FontSize="{DynamicResource FontSmall}" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource BrushText}"/>
+                                        <TextBlock Grid.Row="1" Text="{Binding KeyCapText}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                                                   FontSize="{DynamicResource FontCaption}"
+                                                   Foreground="{Binding KeyCapForeground}"/>
+                                      </Grid>
                                     </Button>
-                                    <!-- 下半：按键区。点一下再按一个键就改键。
-                                         键名另外画一个居中偏下的 TextBlock：TextBlock 不接管点击，点下去还是按钮。 -->
-                                    <Button Classes="capZone" Click="BlockKey_Click" VerticalAlignment="Bottom"
-                                            Height="30" ToolTip.Tip="点下半块，再按一个键，就把这个键绑到这个音"/>
-                                    <TextBlock Text="{Binding KeyCapText}" Foreground="{Binding KeyCapForeground}"
-                                               FontSize="{DynamicResource FontSmall}" IsHitTestVisible="False"
-                                               HorizontalAlignment="Center" VerticalAlignment="Bottom"
-                                               Margin="0,0,0,6"/>
                                     <!-- 右上角：解绑 -->
                                     <Button Classes="capClose" Content="✕" Click="RowRemove_Click"
                                             Width="16" Height="16" Padding="0" FontSize="10"
@@ -198,30 +219,22 @@
                             </DataTemplate>
                           </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                      </ScrollViewer>
-                      <!-- 行尾「+」：在这一行末尾加一个音（列） -->
-                      <Grid Grid.Column="1" Width="34" Height="58" Margin="2,0,0,0">
-                        <Rectangle RadiusX="8" RadiusY="8" Stroke="{DynamicResource BrushBorderStrong}"
-                                   StrokeThickness="1" StrokeDashArray="3,3"/>
-                        <Button Classes="rowPlus" Content="+" FontSize="{DynamicResource FontTitle}"
-                                Click="RowAddCell_Click"
+                        <!-- 行尾「+」：在这一行末尾加一个音（列），紧跟在最后一个键帽右边 -->
+                        <Button Classes="rowPlus" Width="34" Height="58" Margin="2,0,0,0"
+                                Content="+" Click="RowAddCell_Click"
                                 ToolTip.Tip="在这一行末尾加一个音（列）"/>
-                      </Grid>
-                    </Grid>
+                      </StackPanel>
+                    </ScrollViewer>
                   </StackPanel>
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>
 
-            <!-- 最后一行下面的「+」：新增一行，音高比上一行高一个八度 -->
+            <!-- 最后一行下面的「+」：新增一行，音高比上一行高一个八度。整个方框都是点击区 -->
             <StackPanel x:Name="AddRowPanel" Orientation="Horizontal" Spacing="8">
-              <Grid Width="110" Height="32">
-                <Rectangle RadiusX="8" RadiusY="8" Stroke="{DynamicResource BrushBorderStrong}"
-                           StrokeThickness="1" StrokeDashArray="3,3"/>
-                <Button Classes="rowPlus" Content="+ 加一行" FontSize="{DynamicResource FontCaption}"
-                        Click="RowAddRow_Click"
-                        ToolTip.Tip="在最下面新增一行，音高比上一行高一个八度"/>
-              </Grid>
+              <Button Classes="rowPlus rowPlusWide" Width="110" Height="32"
+                      Content="+ 加一行" Click="RowAddRow_Click"
+                      ToolTip.Tip="在最下面新增一行，音高比上一行高一个八度"/>
               <TextBlock Classes="caption" VerticalAlignment="Center"
                          Text="行尾的「+」加一个音，这里的「+」加一整行（高一个八度）。行太长时左右滚动看。"/>
             </StackPanel>
@@ -243,30 +256,26 @@
               <ItemsControl x:Name="FuncRows">
                 <ItemsControl.ItemTemplate>
                   <DataTemplate>
-                    <Grid ColumnDefinitions="Auto,Auto,Auto,Auto" Margin="0,1">
+                    <Grid ColumnDefinitions="Auto,*" Margin="0,1">
                       <TextBlock Grid.Column="0" Width="78" Text="{Binding Label}"
                                  Classes="label" VerticalAlignment="Center"/>
-                      <Border Grid.Column="1" CornerRadius="{DynamicResource RadiusControl}"
-                              BorderThickness="{Binding WaitBorderThickness}"
-                              BorderBrush="{Binding WaitBorderBrush}">
-                        <Button Width="130" FontSize="{DynamicResource FontSmall}" Padding="4,2"
+                      <!-- 绑法与键帽一样：点一下，再按一个键。不再有「选键名」下拉 -->
+                      <Grid Grid.Column="1" ColumnDefinitions="Auto,Auto">
+                        <Border Grid.Column="0" CornerRadius="{DynamicResource RadiusControl}"
+                                BorderThickness="{Binding WaitBorderThickness}"
+                                BorderBrush="{Binding WaitBorderBrush}">
+                          <Button Width="130" FontSize="{DynamicResource FontSmall}" Padding="4,2"
+                                  HorizontalContentAlignment="Center" Classes="secondary"
+                                  Content="{Binding KeyCapText}"
+                                  Foreground="{Binding KeyCapForeground}"
+                                  Click="FuncKey_Click"
+                                  ToolTip.Tip="点一下，再按一个键，就把这个功能绑到这个键。Shift、Ctrl、Alt 单独按一下再松开也行"/>
+                        </Border>
+                        <Button Grid.Column="1" Content="✕" Width="24" Margin="6,0,0,0"
+                                Padding="0" FontSize="{DynamicResource FontMicro}"
                                 HorizontalContentAlignment="Center" Classes="secondary"
-                                Content="{Binding KeyCapText}"
-                                Foreground="{Binding KeyCapForeground}"
-                                Click="FuncKey_Click"
-                                ToolTip.Tip="点一下，再按一个键，就把这个功能绑到这个键。Shift、Ctrl、Alt 单独按一下再松开也行"/>
-                      </Border>
-                      <ComboBox Grid.Column="2" Width="130" Margin="6,0,0,0"
-                                FontSize="{DynamicResource FontCaption}"
-                                VerticalAlignment="Center" IsVisible="{Binding Waiting}"
-                                ItemsSource="{Binding KeyChoices}"
-                                SelectionChanged="KeyName_Changed"
-                                PlaceholderText="选键名"
-                                ToolTip.Tip="手选一个键名，效果等于按了那个键"/>
-                      <Button Grid.Column="3" Content="✕" Width="24" Margin="6,0,0,0"
-                              Padding="0" FontSize="{DynamicResource FontMicro}"
-                              HorizontalContentAlignment="Center" Classes="secondary"
-                              Click="FuncClear_Click" ToolTip.Tip="不用这个功能键，点了以后显示「未设置」"/>
+                                Click="FuncClear_Click" ToolTip.Tip="不用这个功能键，点了以后显示「未绑」"/>
+                      </Grid>
                     </Grid>
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>

@@ -34,9 +34,10 @@ public sealed class KeyBinding
 
     /// <summary>
     /// 这个键属于方案的第几行（从 0 数起，一行里的键必须写同一个值）。
-    /// 界面按它一行一行整齐显示：21 键自然音的下排 Z..M 是 0、中排 A..J 是 1、上排 Q..U 是 2。
+    /// 界面按它一行一行整齐显示：21 键自然音与 21 键半音的下排 Z..M 是 0、中排 A..J 是 1、上排 Q..U 是 2；
+    /// 第五人格键位（三排各 12 个半音）的低音排是 0、中音排是 1、高音排是 2。
     /// 老文件没有这个字段，读进来是 0；一套方案里所有键都是 0 时，界面退回「按物理键盘的排分组」。
-    /// 不能用「物理键盘的排」推方案的行：36 键半音的低音排用了逗号、句点、分号、斜杠、减号、左方括号，
+    /// 不能用「物理键盘的排」推方案的行：第五人格键位的低音排用了逗号、句点、分号、斜杠、减号、左方括号，
     /// 这些键散在四个物理排上。
     /// </summary>
     public int Row { get; set; }
@@ -136,8 +137,8 @@ public sealed class KeymapProfile
     private static IReadOnlyList<KeymapProfile>? _presets;
 
     /// <summary>
-    /// 3 套内置预设。第一项就是默认方案。名字统一由 <see cref="SchemeNameOf"/> 算出来：
-    /// 「N 键 M 排 K 个八度」。只读用；要改先 <see cref="Clone"/>。
+    /// 3 套内置预设。第一项就是默认方案。名字现在是写死的中文（见 <see cref="BuildPresets"/>），
+    /// <see cref="SchemeNameOf"/> 只留着算几何量，不再用来命名。只读用；要改先 <see cref="Clone"/>。
     /// </summary>
     public static IReadOnlyList<KeymapProfile> Presets => _presets ??= BuildPresets();
 
@@ -182,9 +183,12 @@ public sealed class KeymapProfile
     }
 
     /// <summary>
-    /// 21 键半音：三行七列，每列一个半音。
-    /// 下排 Z X C V B N M = 偏移 0..6；中排 A S D F G H J = 7..13；上排 Q W E R T Y U = 14..20。
-    /// 能弹 60..80；键位张角 21 个半音，名字由 <see cref="SchemeNameOf"/> 算成「21 键 3 排 2 个八度」。
+    /// 21 键半音：三行七列**自然音**，三行分别是低音 / 中音 / 高音三个八度，配升半音键补齐半音。
+    /// 下排 Z X C V B N M = 低音 do..si（48 起，偏移 −12 −10 −8 −7 −5 −3 −1）；
+    /// 中排 A S D F G H J = 中音 do..si（60 起，偏移 0 2 4 5 7 9 11）；
+    /// 上排 Q W E R T Y U = 高音 do..si（72 起，偏移 12 14 16 17 19 21 23）。
+    /// 功能键打开，「升半音」绑 Shift：按住 Shift 整排升半音。八度键留空。
+    /// 能弹 48..84（低音 do 到高音 do 再升半音），三个八度。
     /// </summary>
     private static KeymapProfile BuildChromatic21()
     {
@@ -192,27 +196,29 @@ public sealed class KeymapProfile
         string[][] rows = { new[] { "Z", "X", "C", "V", "B", "N", "M" },
                             new[] { "A", "S", "D", "F", "G", "H", "J" },
                             new[] { "Q", "W", "E", "R", "T", "Y", "U" } };
-        // 偏移从 0 起一路数到 20，但行不按八度切：下排 0..6、中排 7..13、上排 14..20，各是一行。
-        int offset = 0;
+        int[] degrees = { 0, 2, 4, 5, 7, 9, 11 };
+        // 行距 12：下排（Row 0）低一个八度，中排（Row 1）是本八度，上排（Row 2）高一个八度。
         for (int r = 0; r < rows.Length; r++)
-            foreach (string k in rows[r])
-                keys.Add(new KeyBinding { Key = k, Offset = offset++, Row = r });
+            for (int c = 0; c < degrees.Length; c++)
+                keys.Add(new KeyBinding { Key = rows[r][c], Offset = 12 * (r - 1) + degrees[c], Row = r });
 
         return new KeymapProfile
         {
             Version = CurrentVersion,
-            Description = "三行七列半音：Z X C V B N M 是偏移 0..6，A S D F G H J 是 7..13，Q W E R T Y U 是 14..20",
+            Description = "三行七列自然音，三行是低音 / 中音 / 高音三个八度："
+                        + "Z X C V B N M 是低音 do..si，A S D F G H J 是中音 do..si，Q W E R T Y U 是高音 do..si；"
+                        + "按住 Shift 升半音",
             BaseNote = 60,
             Keys = keys,
-            ModifiersEnabled = false,
+            ModifiersEnabled = true,
             OctaveUp = null,
             OctaveDown = null,
-            Sharp = null,
+            Sharp = "Shift",
         };
     }
 
     /// <summary>
-    /// 36 键半音三排：三排各 12 个半音，一排一个八度。
+    /// 第 3 套（第五人格键位）：三排各 12 个半音，一排一个八度。键位与旧名「36 键半音三排」完全相同。
     ///
     /// 低音排（基准 60 − 12 = 48 起）：
     ///   DO=, #DO=L RE=. #RE=; MI=/ FA=I #FA=9 SO=O #SO=0 RA=P #RA=- XI=[
@@ -311,14 +317,15 @@ public sealed class KeymapProfile
     /// <summary>
     /// 3 套内置预设，名字直接写死成直白的中文（不再由 <see cref="SchemeNameOf"/> 拼几何量）。
     /// 第 1 套的名字必须等于 <see cref="DefaultName"/>，不等就写日志。
+    /// 第 3 套的用户可见名字由用户指定，键位与旧的「36 键半音三排」相同（见 <see cref="LegacyPresetAlias"/>）。
     /// </summary>
     private static IReadOnlyList<KeymapProfile> BuildPresets()
     {
         var list = new List<KeymapProfile>
         {
-            Preset(BuildDefault(), DefaultName),              // 第 1 套 = 默认方案：三行七列自然音
-            Preset(BuildChromatic21(), "21 键半音"),           // 第 2 套：三行七列，每列一个半音
-            Preset(BuildChromatic36(), "36 键半音三排"),        // 第 3 套：三排各 12 个半音
+            Preset(BuildDefault(), DefaultName),              // 第 1 套 = 默认方案：中 / 高 / 高高，三行七列自然音
+            Preset(BuildChromatic21(), "21 键半音"),           // 第 2 套：低 / 中 / 高三个八度自然音 + Shift 升半音
+            Preset(BuildChromatic36(), "第五人格键位"),         // 第 3 套：三排各 12 个半音
         };
         if (!string.Equals(list[0].Name, DefaultName, StringComparison.Ordinal))
             LogFile.Append($"[键位] 默认方案名是「{list[0].Name}」，与常量「{DefaultName}」不同，请同步。");
@@ -356,13 +363,16 @@ public sealed class KeymapProfile
         // 上一版由 SchemeNameOf 算出来的名字 → 现在的直白名字（键位没变，只是换了称呼）
         ["21 键 3 排 3 个八度"] = DefaultName,
         ["21 键 3 排 2 个八度"] = "21 键半音",
-        ["36 键 4 排 3 个八度"] = "36 键半音三排",
-        ["36 键 3 排 3 个八度"] = "36 键半音三排",
+        ["36 键 4 排 3 个八度"] = "第五人格键位",
+        ["36 键 3 排 3 个八度"] = "第五人格键位",
+        // 第 3 套改名：老名字 → 现在的名字。键位一字未动
+        ["36 键半音三排"] = "第五人格键位",
     };
 
     /// <summary>
     /// 已经删掉的预设：读到这些名字就回退到默认方案。
-    /// 现在只保留 21 键自然音 / 21 键半音 / 36 键半音三排三套，其余历史名字全部列在这里。
+    /// 现在只保留 21 键自然音 / 21 键半音 / 第五人格键位三套，其余历史名字全部列在这里。
+    /// 改过名但键位还在的（例如「36 键半音三排」）走 <see cref="LegacyPresetAlias"/>，不要写在这里。
     /// </summary>
     private static readonly HashSet<string> RemovedPresetNames = new(StringComparer.Ordinal)
     {
@@ -475,7 +485,10 @@ public sealed class KeymapProfile
         return names;
     }
 
-    /// <summary>这个名字是不是内置预设。内置方案不能删除、不能重命名、不能被覆盖。</summary>
+    /// <summary>
+    /// 这个名字是不是内置预设名。内置方案不能被改名、不能被删除，名字也不能被新方案占用。
+    /// 但它的**键位改动**可以存到 schemes 目录里，见 <see cref="LoadByName"/>。
+    /// </summary>
     public static bool IsBuiltInSchemeName(string? name) => PresetByName(name) != null;
 
     /// <summary>这个名字已经被某个方案占用（内置或用户文件）。</summary>
@@ -494,42 +507,57 @@ public sealed class KeymapProfile
     }
 
     /// <summary>
-    /// 按名字载入一个方案。内置名（含老名字）走内置预设，其余读 schemes\&lt;名字&gt;.json。
-    /// 文件不在或读不动返回 null，并写出可读原因。绝不抛异常。
+    /// 按名字载入一个方案。**用户目录优先**：先读 schemes\&lt;名字&gt;.json，
+    /// 读到了就用它（内置名字也一样，用户改过的键位存在这里）；文件不在才退回内置预设。
+    /// 两边都没有返回 null，并写出可读原因。绝不抛异常。
     /// </summary>
     public static KeymapProfile? LoadByName(string? name)
     {
         if (string.IsNullOrWhiteSpace(name)) return null;
 
+        if (TryLoadSchemeFile(name, out var user))
+            return user;
+
         var preset = PresetByName(name);
         if (preset != null) return preset.Clone();
+
+        LogFile.Append($"[键位] 没有方案文件：{SchemeFilePath(name)}");
+        return null;
+    }
+
+    /// <summary>
+    /// 只读用户目录里的同名方案文件。读到就返回 true（profile 是它）。
+    /// 文件不在返回 false（这不是错误，调用方接着找内置预设）；文件坏了写一条日志再返回 false。
+    /// </summary>
+    public static bool TryLoadSchemeFile(string? name, out KeymapProfile? profile)
+    {
+        profile = null;
+        if (string.IsNullOrWhiteSpace(name)) return false;
 
         string path = SchemeFilePath(name);
         try
         {
-            if (!File.Exists(path))
-            {
-                LogFile.Append($"[键位] 没有方案文件：{path}");
-                return null;
-            }
-            return FromJson(File.ReadAllText(path));
+            if (!File.Exists(path)) return false;
+            profile = FromJson(File.ReadAllText(path));
+            return true;
         }
         catch (KeymapFormatException ex)
         {
             LogFile.Append($"[键位] 方案文件格式不对（{path}）：{ex.Message}");
-            return null;
+            return false;
         }
         catch (Exception ex)
         {
             LogFile.Append($"[键位] 读方案文件失败（{path}）：{ex.Message}");
-            return null;
+            return false;
         }
     }
 
     // ================= 读盘 / 写盘 =================
 
     /// <summary>
-    /// 读活动方案。顺序：keymap.json → 设置里记的方案名（用户文件，再内置预设）→ 默认方案。
+    /// 读活动方案。顺序：keymap.json → 设置里记的方案名（`LoadByName`：先读用户目录的同名方案，
+    /// 读不到才用内置预设）→ 默认方案。
     /// 读到改名前的预设名就地改名；读到已经删掉的预设名回退到默认方案，两种情况都写日志。
     /// 任何失败都只写日志，返回默认方案的副本，绝不抛异常。
     /// </summary>
