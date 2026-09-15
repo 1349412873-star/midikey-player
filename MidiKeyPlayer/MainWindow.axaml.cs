@@ -1137,13 +1137,15 @@ public partial class MainWindow : Window
 
     // ================= 打开文件夹（左栏常驻的「文件夹曲目」卡） =================
     //
-    // 用户选一个文件夹，这里列出**这个文件夹本身**里的 MIDI（不进子目录），点一条直接载入。
-    // 列表呈现在左栏的 FolderCard 里（打开卡与轨道列表之间），不再是菜单里的子菜单。
+    // 用户选一个文件夹，这里列出**这个文件夹本身**里的子文件夹与 MIDI（不递归进子目录），
+    // 点一首直接载入、双击子文件夹进入。列表呈现在左栏的 FolderCard 里
+    // （打开卡与轨道列表之间），不再是菜单里的子菜单。
     // 扫描结果只放在内存里，不进设置文件、不改目录；卡的显隐与内容由 RefreshFolderUi() 统一刷新。
 
-    private readonly List<string> _folderFiles = new();   // 上次选中的文件夹里的 MIDI（完整路径）
-    private string _folderPath = "";                      // 上次选中的文件夹
-    private const int FolderMenuMax = 50;                 // 卡片最多列多少首，其余用一条说明占位
+    private readonly List<string> _folderFiles = new();   // 当前文件夹里的 MIDI（完整路径）
+    private readonly List<string> _folderDirs = new();    // 当前文件夹里的子文件夹（完整路径），排在文件前面
+    private string _folderPath = "";                      // 当前目录，也是「上一级」的基准
+    private const int FolderMenuMax = 50;                 // 卡片最多列多少行（子文件夹 + MIDI），其余用一条说明占位
     private static readonly string[] MidiExtensions = { ".mid", ".midi", ".kar", ".rmi" };
 
     /// <summary>
@@ -1182,15 +1184,31 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 扫描文件夹**本身**（不递归子目录），收 .mid / .midi / .kar / .rmi，按文件名排序后刷新左栏的曲目卡。
-    /// 扫描结果留在 <see cref="_folderFiles"/> 里：载入成功后不清空，方便同一批曲子连续换。
+    /// 扫描文件夹**本身**（不递归子目录）：同时收子文件夹与 .mid / .midi / .kar / .rmi，
+    /// 各自按名字排序后刷新左栏的曲目卡。子文件夹排在文件前面，双击进入。
+    /// 扫描结果留在 <see cref="_folderDirs"/> / <see cref="_folderFiles"/> 里：
+    /// 载入成功后不清空，方便同一批曲子连续换。
     /// </summary>
     private void ScanMidiFolder(string path)
     {
         _folderPath = path;
+        _folderDirs.Clear();
         _folderFiles.Clear();
 
         var dir = new System.IO.DirectoryInfo(path);
+        bool failed = false;
+
+        // 子目录与文件分开枚举：其中一项失败（权限、被占用、目录被删）不影响另一项
+        try
+        {
+            foreach (var d in dir.EnumerateDirectories()) _folderDirs.Add(d.FullName);
+        }
+        catch (Exception ex)
+        {
+            failed = true;
+            InsertLog($"读取子文件夹失败：{ex.GetType().Name}: {ex.Message}");
+        }
+
         try
         {
             foreach (var f in dir.EnumerateFiles())
@@ -1198,24 +1216,26 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            _folderFiles.Clear();
+            failed = true;
             InsertLog($"读取文件夹失败：{ex.GetType().Name}: {ex.Message}");
-            RefreshFolderUi();
-            return;
         }
 
-        if (_folderFiles.Count == 0)
-        {
-            InsertLog("这个文件夹里没有找到 MIDI 文件。");
-            RefreshFolderUi();
-            return;
-        }
-
-        // 按文件名排序（忽略大小写）：卡片里显示的就是文件名，顺序与用户在资源管理器里看到的一致。
+        // 各自按名字排序（忽略大小写）：顺序与用户在资源管理器里看到的一致。
+        _folderDirs.Sort((a, b) => string.Compare(
+            System.IO.Path.GetFileName(a), System.IO.Path.GetFileName(b), StringComparison.OrdinalIgnoreCase));
         _folderFiles.Sort((a, b) => string.Compare(
             System.IO.Path.GetFileName(a), System.IO.Path.GetFileName(b), StringComparison.OrdinalIgnoreCase));
 
-        InsertLog($"{dir.Name}：找到 {_folderFiles.Count} 首 MIDI，已列在左侧的文件夹曲目里。");
+        if (_folderDirs.Count == 0 && _folderFiles.Count == 0)
+        {
+            // 读取失败时上面已经写了真实原因，不再补一句会误导人的「没有找到」
+            if (!failed) InsertLog($"{dir.Name}：没有找到 MIDI 文件或子文件夹。");
+        }
+        else
+        {
+            InsertLog($"{dir.Name}：{_folderDirs.Count} 个子文件夹、{_folderFiles.Count} 首 MIDI，已列在左侧的文件夹曲目里。");
+        }
+
         RefreshFolderUi();
     }
 
@@ -1232,10 +1252,15 @@ public partial class MainWindow : Window
     /// 扫描完成、载入一首之后、点「关闭」、以及窗口构造时隐藏。
     ///
     /// - 没选过文件夹：整块隐藏。
-    /// - 文件夹里没有 MIDI：卡仍然可见，只显示一行灰字，方便用户直接换一个目录。
-    /// - 每一条都是 ListBoxItem：Content = 文件名，Tag = 完整路径，悬浮提示 = 完整路径。
-    /// - 超过 <see cref="FolderMenuMax"/> 首只列前 50 首，末尾补一条不可点的「还有 N 首未列出」。
+    /// - 空目录：卡仍然可见，只显示一行灰字，方便用户直接换一个目录。
+    /// - 每一条都是 ListBoxItem：Tag = <see cref="FolderRow"/>，悬浮提示 = 完整路径。
+    ///   子文件夹排在 MIDI 文件前面。
+    /// - 合计超过 <see cref="FolderMenuMax"/> 行只列前 50 行，末尾补一条不可点的「还有 N 项未列出」。
     /// - 当前已载入的那一首在列表里，直接选中它（换歌后也会跟着走），所以一定有高亮标记。
+    /// - 「上一级」按钮按能不能取到父目录置灰。
+    ///
+    /// 注意：这里**只**按 <see cref="_folderPath"/> 是否为空决定显隐，
+    /// 载入歌曲之后 <see cref="_folderPath"/> 不会被清空，所以卡片不会消失。
     /// </summary>
     private void RefreshFolderUi()
     {
@@ -1252,21 +1277,31 @@ public partial class MainWindow : Window
         TxtFolderName.Text = leaf.Length > 0 ? leaf : _folderPath;
         Avalonia.Controls.ToolTip.SetTip(TxtFolderName, _folderPath);   // 附加属性，必须走 SetTip
 
+        // 「上一级」：已经在盘根就没有上一级，按钮置灰（点击处理器里也有同样的兜底）
+        if (BtnFolderUp != null) BtnFolderUp.IsEnabled = GetParentFolder(_folderPath) != null;
+
+        // 子文件夹在前、MIDI 文件在后，合计封顶 FolderMenuMax 行
+        int total = _folderDirs.Count + _folderFiles.Count;
+
         _folderSyncing = true;   // 下面改选中项会触发 SelectionChanged，那一次不是用户点击
         try
         {
             FolderList.Items.Clear();
-            int shown = Math.Min(_folderFiles.Count, FolderMenuMax);
+            int shown = Math.Min(total, FolderMenuMax);
             for (int i = 0; i < shown; i++)
-                FolderList.Items.Add(BuildFolderRow(_folderFiles[i]));
+            {
+                FolderList.Items.Add(i < _folderDirs.Count
+                    ? BuildFolderDirRow(_folderDirs[i])
+                    : BuildFolderRow(_folderFiles[i - _folderDirs.Count]));
+            }
 
-            if (_folderFiles.Count > shown)
+            if (total > shown)
             {
                 var more = new ListBoxItem
                 {
                     Content = new TextBlock
                     {
-                        Text = $"还有 {_folderFiles.Count - shown} 首未列出",
+                        Text = $"还有 {total - shown} 项未列出",
                         FontSize = 12.5,
                         Foreground = ResourceBrush("BrushTextMuted"),
                     },
@@ -1277,16 +1312,17 @@ public partial class MainWindow : Window
                 FolderList.Items.Add(more);
             }
 
-            TxtFolderEmpty.IsVisible = _folderFiles.Count == 0;
+            TxtFolderEmpty.IsVisible = total == 0;
 
             // 载入过的那一首保持选中：换歌后高亮跟着走，用户一眼看到当前是哪首。
             FolderList.SelectedItem = null;
             string current = _parsed?.FilePath ?? "";
-            if (current.Length > 0 && _folderFiles.Contains(current))
+            if (current.Length > 0)
             {
                 for (int i = 0; i < FolderList.Items.Count; i++)
                 {
-                    if (FolderList.Items[i] is ListBoxItem it && (it.Tag as string) == current)
+                    if (FolderList.Items[i] is ListBoxItem it
+                        && it.Tag is FolderRow row && !row.IsDir && row.Path == current)
                     {
                         FolderList.SelectedItem = it;
                         break;
@@ -1300,20 +1336,32 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>曲目卡里的一行：只显示文件名，完整路径放在 Tag 与悬浮提示里。</summary>
-    private static ListBoxItem BuildFolderRow(string path)
+    /// <summary>曲目卡里一行的身份：路径 + 是不是子文件夹（两类行的点击行为不同）。</summary>
+    private sealed record FolderRow(string Path, bool IsDir);
+
+    /// <summary>曲目卡里的 MIDI 行：只显示文件名，完整路径放在 Tag 与悬浮提示里。</summary>
+    private ListBoxItem BuildFolderRow(string path)
+        => BuildFolderItem(path, System.IO.Path.GetFileName(path), isDir: false);
+
+    /// <summary>曲目卡里的子文件夹行：前缀「📁」与文件区分，单击不载入，双击进入。</summary>
+    private ListBoxItem BuildFolderDirRow(string path)
+        => BuildFolderItem(path, "📁 " + System.IO.Path.GetFileName(path), isDir: true);
+
+    private ListBoxItem BuildFolderItem(string path, string text, bool isDir)
     {
         var item = new ListBoxItem
         {
             Content = new TextBlock
             {
-                Text = System.IO.Path.GetFileName(path),
+                Text = text,
                 FontSize = 12.5,
                 TextTrimming = Avalonia.Media.TextTrimming.CharacterEllipsis,
             },
-            Tag = path,
+            Tag = new FolderRow(path, isDir),
         };
         Avalonia.Controls.ToolTip.SetTip(item, path);   // 悬浮显示完整路径
+        // 双击只挂在子文件夹行上：双击列表空白处不会误进入目录
+        if (isDir) item.DoubleTapped += FolderDirRow_DoubleTapped;
         return item;
     }
 
@@ -1321,18 +1369,70 @@ public partial class MainWindow : Window
     /// 点曲目卡里的一行：走与「打开文件…」完全相同的链路
     /// （<see cref="OpenFolderFileAsync"/> 里先确认未导出的手动改动，再 LoadMidiFile）。
     /// 用 SelectionChanged 而不是 Click：键盘上下键也能换曲。
+    /// 子文件夹行单击**不**载入，要双击才进入（见 <see cref="FolderDirRow_DoubleTapped"/>）。
     /// </summary>
     private void FolderList_SelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (_folderSyncing) return;                                        // 程序化选中，不是用户点的
         if (FolderList?.SelectedItem is not ListBoxItem it) return;
-        if (it.Tag is not string path) return;                             // 「还有 N 首未列出」占位行
-        _ = OpenFolderFileAsync(path);
+        if (it.Tag is not FolderRow row) return;                           // 「还有 N 项未列出」占位行
+        if (row.IsDir) return;                                             // 子文件夹：等双击
+        // 抑制标记复位之后仍可能到达的重复选中事件：已经是当前这首就返回，别重复载入
+        if (row.Path == _parsed?.FilePath) return;
+        _ = OpenFolderFileAsync(row.Path);
+    }
+
+    /// <summary>双击子文件夹行：进入该目录（重新扫描并刷新卡片）。MIDI 行没有挂这个处理器，单击已经载入。</summary>
+    private void FolderDirRow_DoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (sender is ListBoxItem it && it.Tag is FolderRow row && row.IsDir)
+            EnterFolder(row.Path);
+    }
+
+    /// <summary>进入一个子文件夹：目录还在就重扫它；已经不在就重扫当前目录，把失效的那一行去掉。</summary>
+    private void EnterFolder(string path)
+    {
+        try
+        {
+            if (!System.IO.Directory.Exists(path))
+            {
+                InsertLog($"文件夹已不在：{path}");
+                ScanMidiFolder(_folderPath);
+                return;
+            }
+            ScanMidiFolder(path);
+        }
+        catch (Exception ex)
+        {
+            InsertLog($"进入文件夹失败：{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>「上一级」：进入 <see cref="_folderPath"/> 的父目录；已经在盘根就只写一行说明。</summary>
+    private void FolderUp_Click(object? sender, RoutedEventArgs e)
+    {
+        string? parent = GetParentFolder(_folderPath);
+        if (string.IsNullOrEmpty(parent))
+        {
+            InsertLog("已经在最上层（盘根），没有上一级。");
+            RefreshFolderUi();   // 顺手刷新按钮的置灰状态
+            return;
+        }
+        ScanMidiFolder(parent);
+    }
+
+    /// <summary>取一个目录的上一级；已经在盘根、路径为空或无效时返回 null（「上一级」按钮据此置灰）。</summary>
+    private static string? GetParentFolder(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        try { return System.IO.Directory.GetParent(path)?.FullName; }
+        catch { return null; }
     }
 
     /// <summary>曲目卡的「关闭」：清空列表并隐藏整块。磁盘上的文件不动。</summary>
     private void FolderClose_Click(object? sender, RoutedEventArgs e)
     {
+        _folderDirs.Clear();
         _folderFiles.Clear();
         _folderPath = "";
         if (FolderList != null) FolderList.Items.Clear();
@@ -1519,7 +1619,12 @@ public partial class MainWindow : Window
             ChooseRecommendedTrack();
             RefreshPreview();
             RememberRecentFile(path);   // 载入成功才记：读不动的文件不进「最近打开」
-            // 曲目卡里给这首打上选中标记（当前已载入的那一首）；没选过文件夹时这一句什么也不做
+            // 曲目卡跟随当前文件所在目录：从别处打开一首歌后，卡片自动列那个目录，接着换曲不用再选文件夹。
+            // 目录没变就不重扫，避免每次换歌都重排列表。
+            string dir = System.IO.Path.GetDirectoryName(path) ?? "";
+            if (dir.Length > 0 && !string.Equals(dir, _folderPath, StringComparison.OrdinalIgnoreCase))
+                ScanMidiFolder(dir);
+            // 曲目卡里给这首打上选中标记（当前已载入的那一首）
             RefreshFolderUi();
             return true;
         }

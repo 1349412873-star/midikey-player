@@ -116,24 +116,33 @@
 
       <!-- ============ 文件夹曲目卡（常驻区域，选过文件夹才可见）============
            整块由 RefreshFolderUi()（MainWindow.axaml.cs）填内容与控制显隐：
-           FolderList 里每一条都是代码建的 ListBoxItem（Content = Grid，Tag = 完整路径，
-           悬浮提示 = 完整路径）。点一条走 OpenFolderFileAsync —— 与「打开文件…」同一条链路，
+           FolderList 里每一条都是代码建的 ListBoxItem（Tag = FolderRow(路径, 是否子文件夹)，
+           悬浮提示 = 完整路径）。子文件夹排在文件前面，双击进入；MIDI 文件单击即载入，
+           走 OpenFolderFileAsync —— 与「打开文件…」同一条链路，
            「有未导出手动改动要先确认」的保护照旧生效。
-           列表高度封顶 150px，超出在卡内滚动；最多 50 首，其余合并成一条不可点的说明。 -->
+           标题行的「上一级」用 Directory.GetParent，已经在盘根时置灰。
+           列表高度封顶 150px，超出在卡内滚动；最多 50 行（子文件夹 + 文件），
+           其余合并成一条不可点的说明。 -->
       <Border x:Name="FolderCard" Grid.Row="1" Classes="card" Margin="{DynamicResource CardGap}"
               Padding="12,10" IsVisible="False">
         <StackPanel Spacing="6">
-          <!-- 标题行：文件夹名（过长省略）+ 「关闭」小按钮 -->
-          <Grid ColumnDefinitions="*,Auto">
-            <TextBlock x:Name="TxtFolderName" Text="" FontSize="{DynamicResource FontSmall}"
+          <!-- 标题行：上一级 + 文件夹名（过长省略）+ 「关闭」小按钮。
+               已经在盘根时「上一级」置灰，见 RefreshFolderUi()。 -->
+          <Grid ColumnDefinitions="Auto,*,Auto">
+            <Button x:Name="BtnFolderUp" Grid.Column="0" Content="上一级" Margin="0,0,8,0"
+                    FontSize="{DynamicResource FontCaption}" Padding="10,3" Classes="secondary"
+                    Click="FolderUp_Click" ToolTip.Tip="进入上一级文件夹（已经在盘根时置灰）"/>
+            <TextBlock Grid.Column="1" x:Name="TxtFolderName" Text="" FontSize="{DynamicResource FontSmall}"
                        FontWeight="SemiBold" VerticalAlignment="Center"
                        TextTrimming="CharacterEllipsis" ToolTip.Tip="当前列出曲目的文件夹"/>
-            <Button x:Name="BtnFolderClose" Grid.Column="1" Content="关闭" Margin="8,0,0,0"
+            <Button x:Name="BtnFolderClose" Grid.Column="2" Content="关闭" Margin="8,0,0,0"
                     FontSize="{DynamicResource FontCaption}" Padding="10,3" Classes="secondary"
                     Click="FolderClose_Click" ToolTip.Tip="收起这块区域（磁盘上的文件不会被动）"/>
           </Grid>
 
           <Grid>
+            <!-- 列表：子文件夹在前（📁 前缀，双击进入），MIDI 文件在后（单击载入）。
+                 条目由代码建，双击处理器只挂在子文件夹行上（见 BuildFolderItem）。 -->
             <ListBox x:Name="FolderList" MaxHeight="150" SelectionMode="Single" Background="Transparent"
                      SelectionChanged="FolderList_SelectionChanged"
                      ScrollViewer.VerticalScrollBarVisibility="Auto"
@@ -143,7 +152,7 @@
             <TextBlock x:Name="TxtFolderEmpty" IsVisible="False"
                        HorizontalAlignment="Center" VerticalAlignment="Center" Margin="12,10"
                        Classes="caption" TextWrapping="Wrap" TextAlignment="Center"
-                       Text="这个文件夹里没有找到 MIDI 文件。"/>
+                       Text="这个文件夹里没有找到 MIDI 文件或子文件夹。"/>
           </Grid>
         </StackPanel>
       </Border>
@@ -465,19 +474,23 @@
           </StackPanel>
         </Border>
 
-        <!-- ================= 高级（默认收起） =================
-             里面是不常改的设置：MIDI 设备实时演奏整张卡、输入兼容、三个热键、
-             导出按键表、播放前自检。控件本身与原来逐个相同（名字、顺序、ToolTip、
-             事件处理器都没动），只是换了父容器。Expander 收起时里面的控件仍然存在，
-             所以代码给 TxtCheckHint / TxtMidiStatus 这类控件赋值不会出错。 -->
-        <Expander x:Name="AdvancedExpander" IsExpanded="False" VerticalAlignment="Top">
+        <!-- ================= 高级（默认收起）+ 播放前自检（常驻） =================
+             高级里是不常改的设置：MIDI 设备实时演奏整张卡、输入兼容、三个热键、导出按键表。
+             「播放前自检」原来收在 Expander 里，现在搬到同一行的右侧，常驻可见；
+             块里的控件名与文案一个都没改（RunPreflight() / BtnRecheck_Click 的引用照旧），
+             TxtCheckHint 仍是块内第二行。
+             布局用 Grid 的 *,Auto 两列：右列是 Auto，永远不会被压扁或裁掉；
+             窗口变窄时被压缩的是左列的高级块，它的标题说明会折行，不会压到右边。 -->
+        <Grid ColumnDefinitions="*,Auto">
+        <Expander x:Name="AdvancedExpander" Grid.Column="0" IsExpanded="False" VerticalAlignment="Top">
           <Expander.Header>
-            <StackPanel Orientation="Horizontal" Spacing="8">
-              <TextBlock Text="高级" FontSize="{DynamicResource FontSmall}" FontWeight="SemiBold"
-                         VerticalAlignment="Center"/>
-              <TextBlock Text="设备接入、输入兼容、热键、导出、自检" Classes="caption"
-                         VerticalAlignment="Center"/>
-            </StackPanel>
+            <!-- 两段标题放进 Grid：窗口窄时说明文字折行，不会溢出到右边的自检块上 -->
+            <Grid ColumnDefinitions="Auto,*">
+              <TextBlock Grid.Column="0" Text="高级" FontSize="{DynamicResource FontSmall}" FontWeight="SemiBold"
+                         VerticalAlignment="Center" Margin="0,0,8,0"/>
+              <TextBlock Grid.Column="1" Text="设备接入、输入兼容、热键、导出" Classes="caption"
+                         TextWrapping="Wrap" VerticalAlignment="Center"/>
+            </Grid>
           </Expander.Header>
 
           <StackPanel Spacing="10" Margin="0,4,0,0">
@@ -589,33 +602,37 @@
               </WrapPanel>
             </Border>
 
-            <!-- 播放前自检：通过打勾、未通过打叉。WrapPanel 让长提示自动换行，不被卡片右边裁掉 -->
-            <Border Background="{DynamicResource BrushSurfaceAlt}" CornerRadius="8" Padding="10,7">
-              <StackPanel Spacing="4">
-                <WrapPanel ItemSpacing="16" LineSpacing="6">
-                  <TextBlock Text="播放前自检" Classes="sectionLabel" VerticalAlignment="Center"/>
-                  <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center"
-                              ToolTip.Tip="模拟按键受 Windows 的 UIPI 限制：目标程序若以管理员运行而本程序不是，按键会被系统拦截">
-                    <TextBlock x:Name="TxtCheckAdminMark" Text="–" FontSize="{DynamicResource FontBody}" FontWeight="Bold"
-                               Foreground="{DynamicResource BrushTextMuted}" VerticalAlignment="Center"/>
-                    <TextBlock x:Name="TxtCheckAdmin" Text="管理员" FontSize="{DynamicResource FontSmall}" VerticalAlignment="Center"/>
-                  </StackPanel>
-                  <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center"
-                              ToolTip.Tip="只有输入法开着并且处于中文/假名输入状态时才会截走按键。中文键盘布局切到英文模式可以直接用，不会误报">
-                    <TextBlock x:Name="TxtCheckImeMark" Text="–" FontSize="{DynamicResource FontBody}" FontWeight="Bold"
-                               Foreground="{DynamicResource BrushTextMuted}" VerticalAlignment="Center"/>
-                    <TextBlock x:Name="TxtCheckIme" Text="输入法" FontSize="{DynamicResource FontSmall}" VerticalAlignment="Center"/>
-                  </StackPanel>
-                  <Button x:Name="BtnRecheck" Content="刷新" FontSize="{DynamicResource FontCaption}" Padding="10,3"
-                          Classes="secondary" VerticalAlignment="Center" Click="BtnRecheck_Click"
-                          ToolTip.Tip="重新检测管理员权限与输入法状态（切换中英文模式后点一下即可）"/>
-                </WrapPanel>
-                <TextBlock x:Name="TxtCheckHint" Classes="caption" Foreground="{DynamicResource BrushWarn}"
-                           TextWrapping="Wrap"/>
-              </StackPanel>
-            </Border>
           </StackPanel>
         </Expander>
+
+          <!-- 播放前自检：从 Expander 里搬到这里，常驻可见。通过打勾、未通过打叉。
+               WrapPanel 让长提示自动换行，不被右边裁掉；TxtCheckHint 是块内第二行。 -->
+          <Border Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Top"
+                  Background="{DynamicResource BrushSurfaceAlt}" CornerRadius="8" Padding="10,7">
+            <StackPanel Spacing="4">
+              <WrapPanel ItemSpacing="16" LineSpacing="6">
+                <TextBlock Text="播放前自检" Classes="sectionLabel" VerticalAlignment="Center"/>
+                <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center"
+                            ToolTip.Tip="模拟按键受 Windows 的 UIPI 限制：目标程序若以管理员运行而本程序不是，按键会被系统拦截">
+                  <TextBlock x:Name="TxtCheckAdminMark" Text="–" FontSize="{DynamicResource FontBody}" FontWeight="Bold"
+                             Foreground="{DynamicResource BrushTextMuted}" VerticalAlignment="Center"/>
+                  <TextBlock x:Name="TxtCheckAdmin" Text="管理员" FontSize="{DynamicResource FontSmall}" VerticalAlignment="Center"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center"
+                            ToolTip.Tip="只有输入法开着并且处于中文/假名输入状态时才会截走按键。中文键盘布局切到英文模式可以直接用，不会误报">
+                  <TextBlock x:Name="TxtCheckImeMark" Text="–" FontSize="{DynamicResource FontBody}" FontWeight="Bold"
+                             Foreground="{DynamicResource BrushTextMuted}" VerticalAlignment="Center"/>
+                  <TextBlock x:Name="TxtCheckIme" Text="输入法" FontSize="{DynamicResource FontSmall}" VerticalAlignment="Center"/>
+                </StackPanel>
+                <Button x:Name="BtnRecheck" Content="刷新" FontSize="{DynamicResource FontCaption}" Padding="10,3"
+                        Classes="secondary" VerticalAlignment="Center" Click="BtnRecheck_Click"
+                        ToolTip.Tip="重新检测管理员权限与输入法状态（切换中英文模式后点一下即可）"/>
+              </WrapPanel>
+              <TextBlock x:Name="TxtCheckHint" Classes="caption" Foreground="{DynamicResource BrushWarn}"
+                         TextWrapping="Wrap"/>
+            </StackPanel>
+          </Border>
+        </Grid>
       </StackPanel>
     </Grid>
   </DockPanel>
