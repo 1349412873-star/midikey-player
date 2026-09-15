@@ -12,8 +12,8 @@
 ## 下载
 
 1. 打开右侧 **Releases**。
-2. 下载 `MidiKeyPlayer-win-x64-<版本>.zip`。当前是 `MidiKeyPlayer-win-x64-1.0.0.zip`。
-3. 解压。里面只有一个 `MidiKeyPlayer.exe`。
+2. 下载 `MidiKeyPlayer-win-x64-<版本>.zip`。当前是 `MidiKeyPlayer-win-x64-1.0.1.zip`。
+3. 解压。里面有 `MidiKeyPlayer.exe` 与 `更新日志.txt`。
 4. 双击 `MidiKeyPlayer.exe`。
 5. 系统弹出 UAC，选「是」。
 6. 如果弹出 SmartScreen「未知发布者」，选「更多信息」，再选「仍要运行」。
@@ -27,6 +27,9 @@
 程序是自包含的单文件 exe。不需要安装 .NET。
 更新说明、第三方声明与 MIT 许可都打包在 exe 里。解压后看不到这些松散文件。
 当前版本没有打开它们的界面入口。要看内容，请打开仓库里的同名源文件。
+
+`更新日志.txt` 在包里，不在 exe 里。它按版本从新到旧累积，每次发新版只在最上面加一节。
+看某一版改了什么，就打开这份文件。源文件是 `MidiKeyPlayer/docs/更新日志.txt`。
 
 ## 使用
 
@@ -236,6 +239,7 @@
 ```
 MidiKeyPlayer/              # 主程序（Avalonia + .NET 8）
 MidiKeyPlayer/docs/更新说明.txt  # 本说明书（打包时嵌进 exe）
+MidiKeyPlayer/docs/更新日志.txt  # 累积更新日志（打包时进 zip）
 MidiKeyPlayer/build-win.sh  # 发布脚本：打包成单文件 exe 的 zip
 MidiKeyPlayer/release/      # 发布产物：zip 与解出的 exe（打包生成）
 示例MIDI/                   # 开发用示例曲目（不进发布包）
@@ -267,6 +271,14 @@ THIRD-PARTY-NOTICES.md      # 第三方组件许可声明
 - **Python 3**：打包脚本用它写 zip，要求标准库 `zipfile` 可用。找不到可用的 Python 就不出包。
 
 打包命令是 `bash MidiKeyPlayer/build-win.sh`，产物在 `MidiKeyPlayer/release/` 下。
+
+发新版之前，先做两件事：
+
+1. 把 `MidiKeyPlayer/MidiKeyPlayer.csproj` 里的 `<Version>` 改成新版本号。
+2. 在 `MidiKeyPlayer/docs/更新日志.txt` 最上面加一节，写清这一版改了什么。
+   旧版本的记录留在原处，不删、不改、不覆盖。
+
+打包脚本会核对这两处：日志里没有当前版本号那一节，就拒绝打包。
 
 ## 自动更新
 

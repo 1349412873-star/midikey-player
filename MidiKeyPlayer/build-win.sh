@@ -3,7 +3,10 @@
 # 需要本仓库根目录下的 .tools/dotnet（.NET 8 SDK），或系统已装 dotnet。
 #
 # 产物只有一个 exe：release/win-x64/MidiKeyPlayer.exe，打成
-# release/MidiKeyPlayer-win-x64-<版本>.zip，zip 里**只有**这一个 exe。
+# release/MidiKeyPlayer-win-x64-<版本>.zip。
+# zip 里固定两项：MidiKeyPlayer.exe 与 更新日志.txt。
+#   更新日志.txt 由 docs/更新日志.txt 复制而来。它按版本从新到旧累积，
+#   发新版时只在最上面加一节，旧记录不动（用户要求「更新日志要有历史记录」）。
 # 「更新说明.txt」「THIRD-PARTY-NOTICES.md」「LICENSE」
 # 已经由 MidiKeyPlayer.csproj 以 AvaloniaResource 打进 exe（见那份文件里的注释），
 # 所以发布目录里不再出现任何松散的说明文件。示例曲目不进包。
@@ -54,6 +57,19 @@ echo ">> 待嵌入 exe 的合规文本："
 check_source "docs/更新说明.txt"                        "Docs/更新说明.txt"
 check_source "../THIRD-PARTY-NOTICES.md"               "Docs/THIRD-PARTY-NOTICES.md"
 check_source "../LICENSE"                              "Docs/LICENSE"
+
+# 累积更新日志：进 zip，不嵌 exe。缺它就终止，避免出一个没有日志的包。
+CHANGELOG="docs/更新日志.txt"
+if [ ! -f "$CHANGELOG" ]; then
+  echo "!! 缺少累积更新日志 $CHANGELOG，终止打包。" >&2
+  exit 1
+fi
+if ! grep -q "^v$VERSION" "$CHANGELOG"; then
+  echo "!! $CHANGELOG 里没有 v$VERSION 这一节，终止打包。" >&2
+  echo "   发新版前先在最上面加一节，写清这一版改了什么。" >&2
+  exit 1
+fi
+echo ">> 待进 zip 的更新日志：$CHANGELOG（含 v$VERSION 一节）"
 
 # 挑一个真的能跑的 python：不能只看 command -v。
 # Windows 的 App Execution Alias（...\WindowsApps\python3，0 字节）会被 command -v 命中，
@@ -133,22 +149,27 @@ EXE_SIZE="$(wc -c < "$EXE" | tr -d ' ')"
 echo ">> 单文件 exe：$EXE（$EXE_SIZE 字节）"
 
 ZIP="release/MidiKeyPlayer-win-x64-$VERSION.zip"
-echo ">> 打包 $ZIP （只打 exe 一项）..."
+echo ">> 打包 $ZIP （打 exe 与 更新日志.txt 两项）..."
 rm -f "$ZIP"
 # 用 python3 写 zip：中文名条目带 UTF-8 标志，Windows 资源管理器解压不乱码；
-# exe 的权限位写成 0755。python 已在上面强制要求，所以这里不再写 zip / tar 回退分支。
-"$PYTHON" - "$ZIP" "$EXE" <<'PY'
+# exe 的权限位写成 0755，日志写成 0644。python 已在上面强制要求，
+# 所以这里不再写 zip / tar 回退分支。
+"$PYTHON" - "$ZIP" "$EXE" "$CHANGELOG" <<'PY'
 import os, sys, time, zipfile
-out, exe = sys.argv[1], sys.argv[2]
-name = "MidiKeyPlayer.exe"
-with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+out, exe, changelog = sys.argv[1], sys.argv[2], sys.argv[3]
+
+def add(z, path, name, mode):
     zi = zipfile.ZipInfo(name)
     zi.flag_bits |= 0x800                       # UTF-8 文件名的标志位
-    st = os.stat(exe)
+    st = os.stat(path)
     zi.date_time = tuple(time.localtime(st.st_mtime)[:6])
-    zi.external_attr = 0o755 << 16
-    with open(exe, "rb") as fh:
+    zi.external_attr = mode << 16
+    with open(path, "rb") as fh:
         z.writestr(zi, fh.read(), zipfile.ZIP_DEFLATED, 6)
+
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+    add(z, exe, "MidiKeyPlayer.exe", 0o755)
+    add(z, changelog, "更新日志.txt", 0o644)
 print("   条目:", zipfile.ZipFile(out).namelist())
 PY
 
