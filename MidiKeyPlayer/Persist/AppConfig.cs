@@ -79,6 +79,20 @@ public sealed class AppConfig
         set => _recentFiles = value ?? new List<string>();   // 设置文件里写成 null 也不能崩
     }
 
+    // —— MIDI 文件「文件夹曲目」目录（左栏常驻卡，issue #57）——
+    private string _folderPath = "";
+
+    /// <summary>
+    /// 上次列出曲目的文件夹：左栏「文件夹曲目」卡就列这个目录里的 MIDI。
+    /// 空 = 没选过（或用户点过「关闭」），启动时卡片隐藏。
+    /// 老设置文件没有这个字段时是空串。目录已经不在时由界面清空，见 MainWindow.RestoreFolderFromConfig。
+    /// </summary>
+    public string FolderPath
+    {
+        get => _folderPath;
+        set => _folderPath = value ?? "";   // 设置文件里写成 null 也不能崩
+    }
+
     /// <summary>旧版本程序（HarpAutoPlayer）的设置目录名。</summary>
     private const string LegacyDirName = "HarpAutoPlayer";
 

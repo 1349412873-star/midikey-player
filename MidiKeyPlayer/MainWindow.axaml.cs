@@ -111,7 +111,9 @@ public partial class MainWindow : Window
         ChkAutoMinimize.IsChecked = _cfg.AutoMinimizeOnPlay;
         TimingCombo.SelectedIndex = Math.Clamp(_cfg.TimingIndex, 0, 2);
         RefreshRecentUi();   // 「打开」下拉菜单按设置里的历史重建（含「最近打开」子菜单）
-        RefreshFolderUi();   // 没选过文件夹：左栏的文件夹曲目卡先隐藏（扫描完成后再显示）
+        // 曲目卡常驻（issue #57）：上次列过的目录还在就自动扫描并显示，不用每次重开都重新选目录
+        RestoreFolderFromConfig();
+        RefreshFolderUi();   // 上面没恢复出目录时：左栏的文件夹曲目卡保持隐藏
 
         // 键位方案（Engine\KeymapProfile）：全局活动方案，实时演奏与文件播放共用。
         // 键位控件在独立的 KeymapWindow 里，主界面只显示方案名并提供一个入口按钮。
@@ -440,6 +442,7 @@ public partial class MainWindow : Window
         _cfg.MidiBaseOctave = (int)Math.Round(SliderMidiOctave.Value);
         _cfg.MidiMinVelocity = (int)Math.Round(SliderMidiVelocity.Value);
         _cfg.MidiAutoFit = ChkMidiAutoFit.IsChecked == true;
+        _cfg.FolderPath = _folderPath;      // 曲目卡目录：内存里的当前目录就是设置里的那一份
         RememberCurrentProfileSettings();   // 速度 / 移调 / 输入档位按方案名同时记一份
         _cfg.Save();
     }
@@ -1140,11 +1143,12 @@ public partial class MainWindow : Window
     // 用户选一个文件夹，这里列出**这个文件夹本身**里的子文件夹与 MIDI（不递归进子目录），
     // 点一首直接载入、双击子文件夹进入。列表呈现在左栏的 FolderCard 里
     // （打开卡与轨道列表之间），不再是菜单里的子菜单。
-    // 扫描结果只放在内存里，不进设置文件、不改目录；卡的显隐与内容由 RefreshFolderUi() 统一刷新。
+    // 当前目录写进设置（AppConfig.FolderPath，见 ScanMidiFolder），重启后由 RestoreFolderFromConfig()
+    // 恢复这张卡；卡的显隐与内容由 RefreshFolderUi() 统一刷新。
 
     private readonly List<string> _folderFiles = new();   // 当前文件夹里的 MIDI（完整路径）
     private readonly List<string> _folderDirs = new();    // 当前文件夹里的子文件夹（完整路径），排在文件前面
-    private string _folderPath = "";                      // 当前目录，也是「上一级」的基准
+    private string _folderPath = "";                      // 当前目录；每次扫描都写进 AppConfig.FolderPath
     private const int FolderMenuMax = 50;                 // 卡片最多列多少行（子文件夹 + MIDI），其余用一条说明占位
     private static readonly string[] MidiExtensions = { ".mid", ".midi", ".kar", ".rmi" };
 
@@ -1153,6 +1157,30 @@ public partial class MainWindow : Window
     /// 那一次不是用户点击，不该去载入文件。
     /// </summary>
     private bool _folderSyncing;
+
+    /// <summary>
+    /// 启动时恢复左栏的曲目卡（issue #57）：设置里记着的目录还在，就重新扫描并显示这张卡，
+    /// 用户重开程序不用再选一次目录。目录已经不在（被删、改名、拔盘）就清掉设置里的记录、
+    /// 留空隐藏，下次启动不再试。
+    /// 写设置的三条路都经过 <see cref="ScanMidiFolder"/>：对话框选目录、载入文件后跟随所在目录、
+    /// 双击进子目录。所以这里只需要读。
+    /// 只在构造期调用一次。
+    /// </summary>
+    private void RestoreFolderFromConfig()
+    {
+        string path = _cfg.FolderPath;
+        if (string.IsNullOrEmpty(path)) return;   // 没选过（或点过「关闭」）：卡片保持隐藏
+
+        if (!System.IO.Directory.Exists(path))
+        {
+            _cfg.FolderPath = "";
+            _cfg.Save();   // 立刻落盘：这个目录不会自己回来，别每次启动都白试一遍
+            InsertLog($"上次的曲目文件夹已不在，曲目卡保持关闭：{path}");
+            return;
+        }
+
+        ScanMidiFolder(path);
+    }
 
     /// <summary>「打开文件夹…」：选一个文件夹，扫描它本身。</summary>
     private async void BtnOpenFolder_Click(object? sender, RoutedEventArgs e)
@@ -1192,6 +1220,10 @@ public partial class MainWindow : Window
     private void ScanMidiFolder(string path)
     {
         _folderPath = path;
+        // 曲目卡常驻（issue #57）：扫描到哪个目录就记哪个目录，重启后由 RestoreFolderFromConfig() 恢复。
+        // 走 SaveSettings 的去抖路径（_saveDeb，400ms）：连着换目录也只落盘一次。
+        _cfg.FolderPath = path;
+        ScheduleSave();
         _folderDirs.Clear();
         _folderFiles.Clear();
 
@@ -1257,7 +1289,7 @@ public partial class MainWindow : Window
     ///   子文件夹排在 MIDI 文件前面。
     /// - 合计超过 <see cref="FolderMenuMax"/> 行只列前 50 行，末尾补一条不可点的「还有 N 项未列出」。
     /// - 当前已载入的那一首在列表里，直接选中它（换歌后也会跟着走），所以一定有高亮标记。
-    /// - 「上一级」按钮按能不能取到父目录置灰。
+    /// - 没有「上一级」按钮（issue #57 去掉）：进子目录靠双击那一行，回上层靠重新选目录。
     ///
     /// 注意：这里**只**按 <see cref="_folderPath"/> 是否为空决定显隐，
     /// 载入歌曲之后 <see cref="_folderPath"/> 不会被清空，所以卡片不会消失。
@@ -1276,9 +1308,6 @@ public partial class MainWindow : Window
         string leaf = System.IO.Path.GetFileName(trimmed);
         TxtFolderName.Text = leaf.Length > 0 ? leaf : _folderPath;
         Avalonia.Controls.ToolTip.SetTip(TxtFolderName, _folderPath);   // 附加属性，必须走 SetTip
-
-        // 「上一级」：已经在盘根就没有上一级，按钮置灰（点击处理器里也有同样的兜底）
-        if (BtnFolderUp != null) BtnFolderUp.IsEnabled = GetParentFolder(_folderPath) != null;
 
         // 子文件夹在前、MIDI 文件在后，合计封顶 FolderMenuMax 行
         int total = _folderDirs.Count + _folderFiles.Count;
@@ -1408,36 +1437,20 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>「上一级」：进入 <see cref="_folderPath"/> 的父目录；已经在盘根就只写一行说明。</summary>
-    private void FolderUp_Click(object? sender, RoutedEventArgs e)
-    {
-        string? parent = GetParentFolder(_folderPath);
-        if (string.IsNullOrEmpty(parent))
-        {
-            InsertLog("已经在最上层（盘根），没有上一级。");
-            RefreshFolderUi();   // 顺手刷新按钮的置灰状态
-            return;
-        }
-        ScanMidiFolder(parent);
-    }
-
-    /// <summary>取一个目录的上一级；已经在盘根、路径为空或无效时返回 null（「上一级」按钮据此置灰）。</summary>
-    private static string? GetParentFolder(string path)
-    {
-        if (string.IsNullOrEmpty(path)) return null;
-        try { return System.IO.Directory.GetParent(path)?.FullName; }
-        catch { return null; }
-    }
-
-    /// <summary>曲目卡的「关闭」：清空列表并隐藏整块。磁盘上的文件不动。</summary>
+    /// <summary>
+    /// 曲目卡的「关闭」：清空列表并隐藏整块，同时清掉设置里记住的目录（重启后不会再出现）。
+    /// 磁盘上的文件不动。
+    /// </summary>
     private void FolderClose_Click(object? sender, RoutedEventArgs e)
     {
         _folderDirs.Clear();
         _folderFiles.Clear();
         _folderPath = "";
+        _cfg.FolderPath = "";
         if (FolderList != null) FolderList.Items.Clear();
         if (FolderCard != null) FolderCard.IsVisible = false;
-        InsertLog("已收起左侧的文件夹曲目。");
+        SaveSettings();   // 立刻落盘：下次启动这张卡不再出现
+        InsertLog("已收起左侧的文件夹曲目（下次启动不再显示）。");
     }
 
     /// <summary>

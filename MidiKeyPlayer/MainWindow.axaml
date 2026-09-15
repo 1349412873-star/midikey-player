@@ -39,6 +39,15 @@
     <Style Selector="Window Button.accent">
       <Setter Property="Foreground" Value="{DynamicResource BrushOnAccent}"/>
     </Style>
+    <!-- 「高级」Expander：Fluent 默认的表头带 16,0,0,0 内边距与 1px 边框，放在卡里就是第二个盒子。
+         这里只压布局；表头的底色与边框走下面的 ExpanderHeader* 画刷键（见 Window.Resources）。
+         Expander 自身的 Background / BorderThickness / Padding / MinHeight / CornerRadius 由模板
+         TemplateBinding 取值，所以直接写在实例上（见下面「高级 + 播放前自检」那张卡）。 -->
+    <Style Selector="Window Expander /template/ ToggleButton#ExpanderHeader">
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="MinHeight" Value="0"/>
+      <Setter Property="CornerRadius" Value="0"/>
+    </Style>
   </Window.Styles>
 
   <!-- 打开入口是 SplitButton，它是 ContentControl，不是 Button：Styles\Controls.axaml 里的
@@ -56,6 +65,17 @@
       <StaticResource x:Key="SplitButtonForegroundPointerOver" ResourceKey="BrushOnAccent"/>
       <StaticResource x:Key="SplitButtonForegroundPressed" ResourceKey="BrushOnAccent"/>
       <StaticResource x:Key="SplitButtonForegroundDisabled" ResourceKey="BrushOnAccent"/>
+
+      <!-- 「高级」Expander 的表头在 Fluent 里是带底色的按钮，悬停与按下还会变灰。
+           它现在和「播放前自检」同在一张卡里，任何底色都会看成第二个盒子。
+           键名见 Avalonia.Themes.Fluent 的 Expander.xaml（表头的三个状态各自取 DynamicResource），
+           在这里覆盖成透明就把底色与 1px 边框一并压平，不再需要碰模板内部。 -->
+      <SolidColorBrush x:Key="ExpanderHeaderBackground" Color="Transparent"/>
+      <SolidColorBrush x:Key="ExpanderHeaderBackgroundPointerOver" Color="Transparent"/>
+      <SolidColorBrush x:Key="ExpanderHeaderBackgroundPressed" Color="Transparent"/>
+      <SolidColorBrush x:Key="ExpanderHeaderBorderBrush" Color="Transparent"/>
+      <SolidColorBrush x:Key="ExpanderHeaderBorderBrushPointerOver" Color="Transparent"/>
+      <SolidColorBrush x:Key="ExpanderHeaderBorderBrushPressed" Color="Transparent"/>
     </ResourceDictionary>
   </Window.Resources>
 
@@ -120,30 +140,30 @@
            悬浮提示 = 完整路径）。子文件夹排在文件前面，双击进入；MIDI 文件单击即载入，
            走 OpenFolderFileAsync —— 与「打开文件…」同一条链路，
            「有未导出手动改动要先确认」的保护照旧生效。
-           标题行的「上一级」用 Directory.GetParent，已经在盘根时置灰。
-           列表高度封顶 150px，超出在卡内滚动；最多 50 行（子文件夹 + 文件），
-           其余合并成一条不可点的说明。 -->
+           没有「上一级」按钮（issue #57 去掉）：进子目录靠双击，回上层靠重新选目录。
+           当前目录写进设置（AppConfig.FolderPath），重启后自动恢复这张卡；
+           目录不在就留空隐藏，见 RestoreFolderFromConfig()。
+           列表区固定 150px 高：曲目多少张，卡片高矮都不变，下面的轨道列表不会跟着跳；
+           最多 50 行（子文件夹 + 文件），其余合并成一条不可点的说明。 -->
       <Border x:Name="FolderCard" Grid.Row="1" Classes="card" Margin="{DynamicResource CardGap}"
               Padding="12,10" IsVisible="False">
         <StackPanel Spacing="6">
-          <!-- 标题行：上一级 + 文件夹名（过长省略）+ 「关闭」小按钮。
-               已经在盘根时「上一级」置灰，见 RefreshFolderUi()。 -->
-          <Grid ColumnDefinitions="Auto,*,Auto">
-            <Button x:Name="BtnFolderUp" Grid.Column="0" Content="上一级" Margin="0,0,8,0"
-                    FontSize="{DynamicResource FontCaption}" Padding="10,3" Classes="secondary"
-                    Click="FolderUp_Click" ToolTip.Tip="进入上一级文件夹（已经在盘根时置灰）"/>
-            <TextBlock Grid.Column="1" x:Name="TxtFolderName" Text="" FontSize="{DynamicResource FontSmall}"
+          <!-- 标题行：文件夹名（过长省略）+ 「关闭」小按钮。两列，固定排版。 -->
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBlock Grid.Column="0" x:Name="TxtFolderName" Text="" FontSize="{DynamicResource FontSmall}"
                        FontWeight="SemiBold" VerticalAlignment="Center"
                        TextTrimming="CharacterEllipsis" ToolTip.Tip="当前列出曲目的文件夹"/>
-            <Button x:Name="BtnFolderClose" Grid.Column="2" Content="关闭" Margin="8,0,0,0"
+            <Button x:Name="BtnFolderClose" Grid.Column="1" Content="关闭" Margin="8,0,0,0"
                     FontSize="{DynamicResource FontCaption}" Padding="10,3" Classes="secondary"
-                    Click="FolderClose_Click" ToolTip.Tip="收起这块区域（磁盘上的文件不会被动）"/>
+                    Click="FolderClose_Click"
+                    ToolTip.Tip="收起这块区域，并清掉设置里记住的目录（下次启动不再出现）。磁盘上的文件不会被动"/>
           </Grid>
 
-          <Grid>
+          <!-- 固定高度 150：文件少时也留一块稳定区域，卡片高度不随曲目数量跳动。 -->
+          <Grid Height="150">
             <!-- 列表：子文件夹在前（📁 前缀，双击进入），MIDI 文件在后（单击载入）。
                  条目由代码建，双击处理器只挂在子文件夹行上（见 BuildFolderItem）。 -->
-            <ListBox x:Name="FolderList" MaxHeight="150" SelectionMode="Single" Background="Transparent"
+            <ListBox x:Name="FolderList" SelectionMode="Single" Background="Transparent"
                      SelectionChanged="FolderList_SelectionChanged"
                      ScrollViewer.VerticalScrollBarVisibility="Auto"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
@@ -474,26 +494,34 @@
           </StackPanel>
         </Border>
 
-        <!-- ================= 高级（默认收起）+ 播放前自检（常驻） =================
-             高级里是不常改的设置：MIDI 设备实时演奏整张卡、输入兼容、三个热键、导出按键表。
-             「播放前自检」原来收在 Expander 里，现在搬到同一行的右侧，常驻可见；
-             块里的控件名与文案一个都没改（RunPreflight() / BtnRecheck_Click 的引用照旧），
-             TxtCheckHint 仍是块内第二行。
-             布局用 Grid 的 *,Auto 两列：右列是 Auto，永远不会被压扁或裁掉；
-             窗口变窄时被压缩的是左列的高级块，它的标题说明会折行，不会压到右边。 -->
-        <Grid ColumnDefinitions="*,Auto">
-        <Expander x:Name="AdvancedExpander" Grid.Column="0" IsExpanded="False" VerticalAlignment="Top">
+        <!-- ================= 一张卡：「高级」（默认收起）+「播放前自检」 =================
+             原来两块并排放：左边 Expander 带 Fluent 默认外框，右边自检自带一条边框，
+             看着像两个盒子。现在装进同一张 Border Classes="card"，中间一条竖线分区，
+             两块共用 Classes="sectionLabel" 的分区标题，字号取主题资源。
+             Expander 的默认外框被压平：内边距与最小高写在 Window.Styles 里，
+             表头的底色与边框由 Window.Resources 覆盖 ExpanderHeader* 画刷键。
+             展开时只是这张卡自然长高，不再套第二层盒子。
+             控件名、文案、事件处理器一律没改（RunPreflight() / BtnRecheck_Click 的引用照旧），
+             TxtCheckHint 仍是自检块内的第二行。
+             布局：*,Auto,Auto 三列。Expander 在 * 列（Stretch，窄窗口时标题说明折行），
+             竖线与自检在 Auto 列，永远不会被压扁或裁掉。 -->
+        <Border Classes="card" Padding="14,10">
+        <Grid ColumnDefinitions="*,Auto,Auto">
+        <Expander x:Name="AdvancedExpander" Grid.Column="0" IsExpanded="False" VerticalAlignment="Top"
+                  HorizontalAlignment="Stretch" MinHeight="0" Padding="0" CornerRadius="0"
+                  Background="Transparent" BorderThickness="0">
           <Expander.Header>
             <!-- 两段标题放进 Grid：窗口窄时说明文字折行，不会溢出到右边的自检块上 -->
             <Grid ColumnDefinitions="Auto,*">
-              <TextBlock Grid.Column="0" Text="高级" FontSize="{DynamicResource FontSmall}" FontWeight="SemiBold"
+              <TextBlock Grid.Column="0" Text="高级" Classes="sectionLabel"
+                         FontSize="{DynamicResource FontSmall}" FontWeight="SemiBold"
                          VerticalAlignment="Center" Margin="0,0,8,0"/>
-              <TextBlock Grid.Column="1" Text="设备接入、输入兼容、热键、导出" Classes="caption"
+              <TextBlock Grid.Column="1" Text="设备、兼容、热键、导出" Classes="caption"
                          TextWrapping="Wrap" VerticalAlignment="Center"/>
             </Grid>
           </Expander.Header>
 
-          <StackPanel Spacing="10" Margin="0,4,0,0">
+          <StackPanel Spacing="10" Margin="0,8,0,0">
 
             <!-- MIDI 设备接入。演奏中这一行用不到；勾了「实时演奏」就直接开着，
                  不勾不影响任何文件播放功能。 -->
@@ -605,13 +633,16 @@
           </StackPanel>
         </Expander>
 
-          <!-- 播放前自检：从 Expander 里搬到这里，常驻可见。通过打勾、未通过打叉。
+          <!-- 竖直分隔线：高级块与自检块的分区线。自检块不再自己套边框，靠这条线和间距分区。 -->
+          <Border Grid.Column="1" Width="1" Margin="14,4" VerticalAlignment="Stretch"
+                  Background="{DynamicResource BrushBorder}"/>
+
+          <!-- 播放前自检：常驻可见。通过打勾、未通过打叉。
                WrapPanel 让长提示自动换行，不被右边裁掉；TxtCheckHint 是块内第二行。 -->
-          <Border Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Top"
-                  Background="{DynamicResource BrushSurfaceAlt}" CornerRadius="8" Padding="10,7">
-            <StackPanel Spacing="4">
+          <StackPanel Grid.Column="2" Spacing="4" VerticalAlignment="Top">
               <WrapPanel ItemSpacing="16" LineSpacing="6">
-                <TextBlock Text="播放前自检" Classes="sectionLabel" VerticalAlignment="Center"/>
+                <TextBlock Text="播放前自检" Classes="sectionLabel" FontSize="{DynamicResource FontSmall}"
+                           FontWeight="SemiBold" VerticalAlignment="Center"/>
                 <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center"
                             ToolTip.Tip="模拟按键受 Windows 的 UIPI 限制：目标程序若以管理员运行而本程序不是，按键会被系统拦截">
                   <TextBlock x:Name="TxtCheckAdminMark" Text="–" FontSize="{DynamicResource FontBody}" FontWeight="Bold"
@@ -630,9 +661,9 @@
               </WrapPanel>
               <TextBlock x:Name="TxtCheckHint" Classes="caption" Foreground="{DynamicResource BrushWarn}"
                          TextWrapping="Wrap"/>
-            </StackPanel>
-          </Border>
+          </StackPanel>
         </Grid>
+        </Border>
       </StackPanel>
     </Grid>
   </DockPanel>
