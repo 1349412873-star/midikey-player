@@ -19,8 +19,6 @@ namespace MidiKeyPlayer;
 ///     主窗打开后自动走「打开 MIDI 文件」这条链路载入该文件（同一个 LoadMidiFile）。
 /// MIDIKEY_UI_SNAPSHOT_MIX=all
 ///     载入后把左侧所有非打击乐候选按列表顺序勾进合奏（第一个 = 0 号声部）。
-/// MIDIKEY_UI_SNAPSHOT_CHORD=on|off
-///     显式设置「保留和弦」；off 用来验单音线提取（MelodyExtractor）也保留声轨归属。
 /// MIDIKEY_UI_SNAPSHOT_REPORT=/path/report.txt
 ///     拍图前把「左侧每行文字颜色 ↔ 卷帘每个音符颜色」的对照表写成文本，便于逐行核对。
 ///
@@ -60,19 +58,6 @@ public partial class MainWindow
             {
                 window.MixAllPlayableTracksForDev();
             }
-            // 单音线（关闭「保留和弦」）走 MelodyExtractor，声轨归属也要保留：这条开关只用来验它。
-            // on / off 都显式设一次，免得设置文件里的旧值影响截图。
-            var chordMode = Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_CHORD");
-            if (string.Equals(chordMode, "off", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(chordMode, "on", StringComparison.OrdinalIgnoreCase))
-            {
-                bool on = string.Equals(chordMode, "on", StringComparison.OrdinalIgnoreCase);
-                window._chordOn = on;
-                window.ChkChordMode.IsChecked = on;
-                window.RefreshPreview();
-                Log($"CHORD={(on ? "on" : "off")}：保留和弦已按快照要求设置");
-            }
-
             // 等布局就绪，900ms 是实测够用的值
             var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(900) };
             timer.Tick += (_, _) =>
@@ -149,7 +134,7 @@ public partial class MainWindow
         var active = window.ActiveRows();
 
         sb.AppendLine($"文件：{window._parsed?.FilePath ?? "(未载入)"}");
-        sb.AppendLine($"保留和弦：{window._chordOn}；参与演奏的行数：{active.Count}");
+        sb.AppendLine($"参与演奏的行数：{active.Count}");
         sb.AppendLine();
         sb.AppendLine("== 左侧列表（每行文字颜色）==");
         for (int i = 0; i < rows.Count; i++)

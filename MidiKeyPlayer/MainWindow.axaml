@@ -41,6 +41,24 @@
     </Style>
   </Window.Styles>
 
+  <!-- 打开入口是 SplitButton，它是 ContentControl，不是 Button：Styles\Controls.axaml 里的
+       Button.accent 不适用。所以直接把 Fluent 主题里 SplitButton 用到的画刷键换成项目强调色
+       （键名见 Avalonia.Themes.Fluent 的 SplitButton.xaml，四个状态全部用 DynamicResource 取，
+       在这里覆盖就能生效）。本窗口只有这一个 SplitButton。
+       不做这一步的话，按钮是 Fluent 默认的浅灰，颜色与旧的 accent 主按钮不一致。 -->
+  <Window.Resources>
+    <ResourceDictionary>
+      <StaticResource x:Key="SplitButtonBackground" ResourceKey="BrushAccent"/>
+      <StaticResource x:Key="SplitButtonBackgroundPointerOver" ResourceKey="BrushAccentHover"/>
+      <StaticResource x:Key="SplitButtonBackgroundPressed" ResourceKey="BrushAccentPressed"/>
+      <StaticResource x:Key="SplitButtonBackgroundDisabled" ResourceKey="BrushAccentDisabled"/>
+      <StaticResource x:Key="SplitButtonForeground" ResourceKey="BrushOnAccent"/>
+      <StaticResource x:Key="SplitButtonForegroundPointerOver" ResourceKey="BrushOnAccent"/>
+      <StaticResource x:Key="SplitButtonForegroundPressed" ResourceKey="BrushOnAccent"/>
+      <StaticResource x:Key="SplitButtonForegroundDisabled" ResourceKey="BrushOnAccent"/>
+    </ResourceDictionary>
+  </Window.Resources>
+
   <Grid>
 
     <!-- 左：文件/轨道；右：演奏控制 -->
@@ -74,23 +92,21 @@
     <Grid Width="440" RowDefinitions="Auto,*" DockPanel.Dock="Left" Margin="0,0,12,0">
 
       <Border Grid.Row="0" Classes="card">
-        <Grid ColumnDefinitions="Auto,Auto,*" RowDefinitions="Auto,Auto">
-          <!-- 首要操作，给足视觉重量 -->
-          <Button x:Name="BtnOpen" Content="打开 MIDI 文件…" Click="BtnOpen_Click"
-                  Classes="accent" Padding="14,7" FontSize="{DynamicResource FontBody}"/>
-          <!-- 最近打开：菜单项由代码按 AppConfig.RecentFiles 填，列表为空时置灰 -->
-          <Button x:Name="BtnRecent" Content="最近打开 ▾" Classes="secondary"
-                  FontSize="{DynamicResource FontSmall}" Padding="10,6" Margin="8,0,0,0"
-                  VerticalAlignment="Center" IsEnabled="False"
-                  ToolTip.Tip="最近打开过的 MIDI 文件（最多 10 个）" ToolTip.ShowOnDisabled="True">
-            <Button.Flyout>
+        <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto">
+          <!-- 打开入口：主体 = 文件选择对话框（一键，行为与旧按钮一样）；
+               右侧箭头 = 菜单（打开文件… / 打开文件夹… / 这个文件夹里的曲目 ▸ / 最近打开 ▸）。
+               菜单项全部由 RefreshRecentUi() 重建，见 MainWindow.axaml.cs。 -->
+          <SplitButton x:Name="BtnOpen" Content="打开 MIDI 文件 / 文件夹" Click="BtnOpen_Click"
+                       Padding="14,7" FontSize="{DynamicResource FontBody}" VerticalAlignment="Center"
+                       ToolTip.Tip="点左边直接选文件；点右边的 ▾ 可以选文件夹（自动列出里面的 MIDI），或从最近打开里挑">
+            <SplitButton.Flyout>
               <MenuFlyout Placement="BottomEdgeAlignedLeft"/>
-            </Button.Flyout>
-          </Button>
-          <TextBlock Grid.Column="2" x:Name="LblFile" VerticalAlignment="Center"
+            </SplitButton.Flyout>
+          </SplitButton>
+          <TextBlock Grid.Column="1" x:Name="LblFile" VerticalAlignment="Center"
                      Margin="12,0,0,0" Text="未选择文件" Classes="caption"
                      TextTrimming="CharacterEllipsis"/>
-          <TextBlock Grid.Row="1" Grid.ColumnSpan="3" Classes="sectionLabel" Margin="0,8,0,0"
+          <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Classes="sectionLabel" Margin="0,8,0,0"
                      Text="支持 .mid / .midi / .kar / .rmi"/>
         </Grid>
       </Border>
@@ -163,7 +179,7 @@
                        HorizontalAlignment="Center" VerticalAlignment="Center"
                        TextAlignment="Center" TextWrapping="Wrap" Margin="24"
                        Classes="caption" LineHeight="22"
-                       Text="还没有载入曲目&#x0a;点「打开 MIDI 文件…」选一首，再点一行作为主旋律"/>
+                       Text="还没有载入曲目&#x0a;点「打开 MIDI 文件 / 文件夹」选一首，再点一行作为主旋律"/>
           </Grid>
         </Grid>
       </Border>
@@ -319,7 +335,7 @@
                            FontSize="{DynamicResource FontCaption}"/>
                 <TextBlock FontSize="{DynamicResource FontCaption}" TextWrapping="Wrap" LineHeight="15"
                            Foreground="{DynamicResource BrushTextSecondary}"
-                           Text="卷帘颜色 = 左侧声轨列表的颜色，一轨一色。灰条 = 超出音域不发声。"/>
+                           Text="卷帘颜色 = 左侧声轨列表的颜色，一轨一色。灰条 = 当前方案里没有对应的键，演奏与试听都会跳过。"/>
               </StackPanel>
               <!-- 一行一条：左列操作、右列作用。两列同一个 LineHeight，行与行自然对齐。 -->
               <ScrollViewer Grid.Row="1" Margin="0,6,0,0" VerticalScrollBarVisibility="Auto">
@@ -425,12 +441,12 @@
             <Button x:Name="BtnAutoTranspose" Content="一键移调" FontSize="{DynamicResource FontSmall}"
                     Padding="12,5" Classes="secondary" VerticalAlignment="Center"
                     Click="BtnAutoTranspose_Click"
-                    ToolTip.Tip="自动移调，让所有音落进乐器音域"/>
+                    ToolTip.Tip="自动移调，让没有对应键的音最少（这些音会跳过不弹，卷帘里画成灰色）"/>
 
             <Button x:Name="BtnNaturalTranspose" Content="自然音最多" FontSize="{DynamicResource FontSmall}"
                     Padding="12,5" Classes="secondary" VerticalAlignment="Center"
                     Click="BtnNaturalTranspose_Click"
-                    ToolTip.Tip="自动移调，让最多音落在自然音上（口琴等没有半音键的乐器用）。自然音同样多时取超音域更少的"/>
+                    ToolTip.Tip="自动移调，让最多音落在自然音上（口琴等没有半音键的乐器用）。自然音同样多时取没有对应键的更少"/>
 
             <StackPanel Orientation="Horizontal" Spacing="8">
               <TextBlock Text="倒计时" Classes="label" MinWidth="46"/>
@@ -451,11 +467,6 @@
                       ToolTip.Tip="播放后窗口最小化。不勾选则保持原样（副屏看进度用，记得点一下目标窗口）"
                       IsCheckedChanged="AutoMinimize_Changed"/>
 
-            <!-- 和弦开关：跟着「合奏」走。关掉后只保留一条单音线，卷帘也只显示被保留的音。 -->
-            <CheckBox x:Name="ChkChordMode" Content="保留和弦" FontSize="{DynamicResource FontSmall}"
-                      IsChecked="True" VerticalAlignment="Center"
-                      ToolTip.Tip="勾选=多声部按优先级合成，听感饱满。不勾选=提取一条单音主旋律，卷帘只显示被保留的音"
-                      IsCheckedChanged="ChordMode_Changed"/>
             </WrapPanel>
           </StackPanel>
 

@@ -101,70 +101,9 @@ public sealed class PlaybackEngine : IDisposable
     /// <summary>输入时序预算（物理毫秒）。播放中可改，下一轮播放生效。</summary>
     public InputTiming Timing { get; set; } = InputTiming.Standard;
 
-    // ================= 和弦开关与单音提取（第 4 节） =================
-
-    /// <summary>
-    /// 和弦开关：true（默认）= 保留和弦，按声部优先级合并（旧行为，逐字不变）；
-    /// false = 只演奏「平滑 skyline」提取出的单音线。界面可读写。
-    /// </summary>
-    public bool ChordMode { get; set; } = true;
-
-    /// <summary>
-    /// 最近一次 <see cref="ApplyChordMode"/> 定出的、真正会演奏的音符集合。
-    /// 关闭和弦时卷帘只画这些音（未保留的音不在集合里）。
-    /// </summary>
-    public IReadOnlyList<RawNote> PlayedNotes { get; private set; } = Array.Empty<RawNote>();
-
-    /// <summary>
-    /// 按和弦开关把多声部原始音符定成一条谱面（未移调、未映射），顺序固定：原始音 → 提取 → 移调 → Map。
-    /// true：走 <see cref="NoteMapper.MergeVoicesByPriority"/>，即旧行为。
-    /// false：先排除打击乐（通道 10），合并声部后跑 <see cref="MelodyExtractor.Extract"/>，得到严格单音线。
-    /// Rank 越小优先级越高（合奏勾选顺序，0 最优先）。
-    /// 两条分支产出的每个音都带着 <see cref="RawNote.Voice"/> = Rank，卷帘靠它上色。
-    /// </summary>
-    public static List<RawNote> ResolveNotes(IEnumerable<(int Rank, RawNote Note)> voices, bool chordMode)
-    {
-        var list = voices.ToList();
-        if (chordMode)
-            return NoteMapper.MergeVoicesByPriority(list.Select(v => (v.Rank, v.Note)));
-
-        // 只有在确实选了旋律轨时才排除打击乐。整轨都是鼓时不排除，否则会得到空谱面。
-        bool hasMelodic = list.Any(v => !MelodyExtractor.IsPercussion(v.Note, ""));
-        var kept = hasMelodic ? list.Where(v => !MelodyExtractor.IsPercussion(v.Note, "")).ToList() : list;
-        var merged = NoteMapper.MergeVoicesByPriority(kept.Select(v => (v.Rank, v.Note)));
-        // Extract 保留合并结果里的 Voice，所以单音线也带归属
-        return MelodyExtractor.Extract(merged, excludePercussion: hasMelodic);
-    }
-
-    /// <summary>
-    /// 同上，但声部带轨道名：关闭和弦时连「轨道名含 drum / perc / 打击」的轨一起排除。
-    /// </summary>
-    public static List<RawNote> ResolveNotes(
-        IEnumerable<(int Rank, string TrackName, RawNote Note)> voices, bool chordMode)
-    {
-        var list = voices.ToList();
-        if (chordMode)
-            return NoteMapper.MergeVoicesByPriority(list.Select(v => (v.Rank, v.Note)));
-
-        // 同上：整轨都是鼓时保留鼓点，不排除。
-        bool hasMelodic = list.Any(v => !MelodyExtractor.IsPercussion(v.Note, v.TrackName));
-        var kept = hasMelodic
-            ? list.Where(v => !MelodyExtractor.IsPercussion(v.Note, v.TrackName)).ToList()
-            : list;
-        var merged = NoteMapper.MergeVoicesByPriority(kept.Select(v => (v.Rank, v.Note)));
-        return MelodyExtractor.Extract(merged, excludePercussion: hasMelodic);
-    }
-
-    /// <summary>
-    /// 用当前 <see cref="ChordMode"/> 定谱，并把结果记进 <see cref="PlayedNotes"/>。
-    /// 返回的就是「按当前开关真正会演奏的音符集合」。
-    /// </summary>
-    public List<RawNote> ApplyChordMode(IEnumerable<(int Rank, string TrackName, RawNote Note)> voices)
-    {
-        var notes = ResolveNotes(voices, ChordMode);
-        PlayedNotes = notes;
-        return notes;
-    }
+    // 原来的第 4 节「和弦开关与单音提取」已整体删除：ChordMode / PlayedNotes /
+    // ResolveNotes（两个重载）/ ApplyChordMode 全都没有调用者。
+    // 谱面现在由上游 MainWindow.ComputeAutoNotes 定好（演奏全部音），本类只负责派发按键。
 
 #if MIDIKEY_TEST
     /// <summary>
@@ -219,7 +158,7 @@ public sealed class PlaybackEngine : IDisposable
         // 400% 下修饰键提前量按 10ms 排出，小于一帧，导出的脚本就会漏掉八度 / 升半音键。
         double safeSpeed = speed <= 0 ? 1.0 : Math.Clamp(speed, MinSpeed, MaxSpeed);
         engine.Speed = safeSpeed;
-        // 谱面已由上游定好（和弦开关/单音提取都在上游），这里不再自己按音域取舍。
+        // 谱面已由上游定好（MainWindow.ComputeAutoNotes），这里不再自己按音域取舍。
         // 只跳过没有可用按键的音（Key 不是按键字符），免得排出一次空格键。
         var decided = notes.Where(n => n.Key != ' ' && n.Key != '\0').ToList();
         var (evs, _) = engine.BuildSchedule(decided, ModState.None);

@@ -48,9 +48,10 @@ public sealed class AppConfig
     public int TimingIndex { get; set; } = 1;         // 输入兼容档位：0稳健/1标准/2极限
     public string SkippedUpdateTag { get; set; } = "";   // 用户选择“跳过”的版本号（空=不跳过）
 
-    // —— 键位方案与和弦 ——
+    // —— 键位方案 ——
     public string KeymapName { get; set; } = KeymapProfile.DefaultName;  // 当前键位方案名
-    public bool ChordMode { get; set; } = true;         // 保留和弦（关掉则提取单音线）
+    // 原来的 ChordMode（保留和弦）字段已删除：该功能移除后行为固定为「演奏 MIDI 里的全部音」。
+    // 老设置文件里的 "ChordMode" 是未知成员，源生成默认 UnmappedMemberHandling.Skip，读盘时直接忽略。
 
     /// <summary>按方案名分别记住的速度 / 移调 / 输入兼容档。键是方案名。</summary>
     public Dictionary<string, ProfileSettings> PerProfile { get; set; } = new();

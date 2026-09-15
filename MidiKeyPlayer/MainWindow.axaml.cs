@@ -45,7 +45,6 @@ public partial class MainWindow : Window
     private bool _editsExported;                      // true = 这份手动改动已经导出过 MIDI（UI-01 / UI-02）
     private bool _discardPrompting;                   // RV-09：丢弃改动确认框正在显示，不重复弹
     private bool _revertingTrack;                     // RV-09：取消后回退主旋律轨选中，忽略自触发的事件
-    private bool _revertingChord;                     // RV-09：取消后回退和弦勾选，忽略自触发的事件
     private bool _revertingMix;                       // RV-09：取消后回退合奏勾选，忽略自触发的事件
     private bool _exitConfirming;                     // 关窗确认框正在显示，避免连点 × 弹多个
     private bool _helpOn;                             // 卷帘右侧操作说明：默认收起，保持界面干净
@@ -74,7 +73,6 @@ public partial class MainWindow : Window
 
     // —— 键位方案（控件在 KeymapWindow 里，这里只存当前方案与方案名） ——
     private KeymapProfile _keymap = KeymapProfile.Default;
-    private bool _chordOn = true;     // 和弦开关：勾选 = 多声部合成；关闭 = 只留一条单音线
 
     public MainWindow()
     {
@@ -111,9 +109,8 @@ public partial class MainWindow : Window
         SliderTranspose.Value = Math.Clamp(_cfg.Transpose, -24, 24);
         ChkTrimLead.IsChecked = _cfg.TrimLead;
         ChkAutoMinimize.IsChecked = _cfg.AutoMinimizeOnPlay;
-        ChkChordMode.IsChecked = _cfg.ChordMode;
         TimingCombo.SelectedIndex = Math.Clamp(_cfg.TimingIndex, 0, 2);
-        RefreshRecentUi();   // 「最近打开」菜单按设置里的历史重建；没有历史时按钮置灰
+        RefreshRecentUi();   // 「打开」下拉菜单按设置里的历史重建（含「最近打开」子菜单）
 
         // 键位方案（Engine\KeymapProfile）：全局活动方案，实时演奏与文件播放共用。
         // 键位控件在独立的 KeymapWindow 里，主界面只显示方案名并提供一个入口按钮。
@@ -401,7 +398,7 @@ public partial class MainWindow : Window
         // 并挂成按钮的悬浮提示，用户把鼠标停在灰按钮上也能看到。
         string reason = hasTrack
             ? (hasPlayable ? "" : "这首歌没有可弹的音：换个键位方案，或调一下「移调」")
-            : "先点「打开 MIDI 文件…」，再在左侧点一行作为主旋律";
+            : "先点「打开 MIDI 文件 / 文件夹」，再在左侧点一行作为主旋律";
         TxtHotHint.Text = BtnPlay.IsEnabled ? "F6：开始 / 暂停 / 继续" : reason;
         // ToolTip 在 Avalonia 里是附加属性，必须走 SetTip
         Avalonia.Controls.ToolTip.SetTip(BtnPlay, BtnPlay.IsEnabled ? null : reason);
@@ -720,7 +717,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// RV-09：换主旋律轨 / 改和弦开关 / 改合奏勾选也会重建谱面并清空撤销栈，
+    /// RV-09：换主旋律轨 / 改合奏勾选也会重建谱面并清空撤销栈，
     /// 所以先走同一个确认框。没有未导出改动就直接放行（不弹框）。
     /// 已经有确认框在显示时不重复弹，按「保持原状」处理（返回 false）。
     /// </summary>
@@ -1102,8 +1099,10 @@ public partial class MainWindow : Window
 
     // ================= 文件载入 =================
 
+    /// <summary>打开文件对话框。既是 SplitButton 主体的处理函数，也是菜单里「打开文件…」的处理函数。</summary>
     private async void BtnOpen_Click(object? sender, RoutedEventArgs e)
     {
+        HideOpenMenu();   // 从下拉菜单里点进来时先收菜单：对话框与确认框不压在菜单上面
         try
         {
             var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
@@ -1135,9 +1134,156 @@ public partial class MainWindow : Window
         }
     }
 
+    // ================= 打开文件夹（列出文件夹里的 MIDI） =================
+    //
+    // 用户选一个文件夹，这里列出**这个文件夹本身**里的 MIDI（不进子目录），点一条直接载入。
+    // 扫描结果只放在内存里，不进设置文件、不改目录；菜单由 RefreshRecentUi() 重建。
+
+    private readonly List<string> _folderFiles = new();   // 上次选中的文件夹里的 MIDI（完整路径）
+    private string _folderPath = "";                      // 上次选中的文件夹
+    private const int FolderMenuMax = 50;                 // 菜单最多列多少首，其余用禁用项说明
+    private static readonly string[] MidiExtensions = { ".mid", ".midi", ".kar", ".rmi" };
+
+    /// <summary>「打开文件夹…」：选一个文件夹，扫描它本身。</summary>
+    private async void BtnOpenFolder_Click(object? sender, RoutedEventArgs e)
+    {
+        HideOpenMenu();
+        try
+        {
+            var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+            {
+                Title = "选择放 MIDI 的文件夹",
+                AllowMultiple = false,
+            });
+            if (folders.Count == 0) return;
+
+            string? path = folders[0].TryGetLocalPath();
+            if (string.IsNullOrEmpty(path))
+            {
+                // 网络位置、压缩包内、权限不足都可能拿不到本地路径。说清原因，不弹空菜单。
+                InsertLog("打开文件夹失败：这个位置拿不到本地路径（可能是网络位置，或权限不足）。");
+                return;
+            }
+
+            ScanMidiFolder(path);
+        }
+        catch (Exception ex)
+        {
+            InsertLog($"打开文件夹对话框失败：{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 扫描文件夹**本身**（不递归子目录），收 .mid / .midi / .kar / .rmi，按文件名排序后重建菜单。
+    /// 扫描结果留在 <see cref="_folderFiles"/> 里：载入成功后不清空，方便同一批曲子连续换。
+    /// </summary>
+    private void ScanMidiFolder(string path)
+    {
+        _folderPath = path;
+        _folderFiles.Clear();
+
+        var dir = new System.IO.DirectoryInfo(path);
+        try
+        {
+            foreach (var f in dir.EnumerateFiles())
+                if (IsMidiFile(f.Extension)) _folderFiles.Add(f.FullName);
+        }
+        catch (Exception ex)
+        {
+            _folderFiles.Clear();
+            InsertLog($"读取文件夹失败：{ex.GetType().Name}: {ex.Message}");
+            RefreshRecentUi();
+            return;
+        }
+
+        if (_folderFiles.Count == 0)
+        {
+            InsertLog("这个文件夹里没有找到 MIDI 文件。");
+            RefreshRecentUi();
+            return;
+        }
+
+        // 按文件名排序（忽略大小写）：菜单里显示的就是文件名，顺序与用户在资源管理器里看到的一致。
+        _folderFiles.Sort((a, b) => string.Compare(
+            System.IO.Path.GetFileName(a), System.IO.Path.GetFileName(b), StringComparison.OrdinalIgnoreCase));
+
+        InsertLog($"{dir.Name}：找到 {_folderFiles.Count} 首 MIDI，在「打开」菜单的「这个文件夹里的曲目」里选。");
+        RefreshRecentUi();
+    }
+
+    /// <summary>文件夹扫描只认这四种扩展名，与文件对话框的过滤器同一套。</summary>
+    private static bool IsMidiFile(string ext)
+    {
+        foreach (string e in MidiExtensions)
+            if (e.Equals(ext, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// 「这个文件夹里的曲目 ▸」子菜单：点一条就用与「打开文件…」完全相同的链路载入。
+    /// 超过 <see cref="FolderMenuMax"/> 首时只列前 50 首，末尾用一条禁用项说明还剩多少 ——
+    /// 200 首全塞进菜单会让弹出明显变卡。
+    /// </summary>
+    private MenuItem BuildFolderMenu()
+    {
+        var root = new MenuItem { Header = "这个文件夹里的曲目 ▸" };
+        Avalonia.Controls.ToolTip.SetTip(root, _folderPath);
+        int shown = Math.Min(_folderFiles.Count, FolderMenuMax);
+        for (int i = 0; i < shown; i++)
+        {
+            string path = _folderFiles[i];
+            var item = new MenuItem
+            {
+                Header = System.IO.Path.GetFileName(path),   // 菜单里只显示文件名
+                Tag = path,
+            };
+            Avalonia.Controls.ToolTip.SetTip(item, path);    // 悬浮显示完整路径
+            item.Click += FolderFile_Click;
+            root.Items.Add(item);
+        }
+        if (_folderFiles.Count > shown)
+            root.Items.Add(new MenuItem { Header = $"还有 {_folderFiles.Count - shown} 首未列出", IsEnabled = false });
+        return root;
+    }
+
+    /// <summary>点「这个文件夹里的曲目」里的某一项：先收菜单，再走打开链路。</summary>
+    private void FolderFile_Click(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem mi || mi.Tag is not string path) return;
+        HideOpenMenu();
+        _ = OpenFolderFileAsync(path);
+    }
+
+    /// <summary>
+    /// 打开文件夹列表里的一个路径。链路与「打开文件…」完全相同：
+    /// 先确认未导出的手动改动，再 <see cref="LoadMidiFile"/>。
+    /// 文件已不在（改名或删除）就重扫一次，菜单跟着变成当前目录的内容。
+    /// </summary>
+    private async Task OpenFolderFileAsync(string path)
+    {
+        try
+        {
+            if (!System.IO.File.Exists(path))
+            {
+                InsertLog($"文件已不在：{path}");
+                ScanMidiFolder(_folderPath);
+                return;
+            }
+            if (!await ConfirmDiscardEditsAsync("打开文件夹里的文件")) return;
+            LoadMidiFile(path);
+        }
+        catch (Exception ex)
+        {
+            InsertLog($"打开文件失败：{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>收起「打开」下拉菜单。点菜单项后先收菜单，对话框与确认框不会压在菜单上面。</summary>
+    private void HideOpenMenu() => BtnOpen?.Flyout?.Hide();
+
     // ================= 最近打开 =================
     //
-    // 只记路径、只存进现有设置文件（AppConfig.RecentFiles）：不复制文件、不扫描目录。
+    // 只记路径、只存进现有设置文件（AppConfig.RecentFiles）：不复制文件、不开后台线程、不改目录。
 
     /// <summary>
     /// 载入成功后记进「最近打开」：同路径只留一条、最新的排最前，最多
@@ -1160,50 +1306,72 @@ public partial class MainWindow : Window
         RefreshRecentUi();
     }
 
-    /// <summary>按当前历史重建「最近打开」菜单，并在列表为空时把按钮置灰。</summary>
+    /// <summary>
+    /// 重建「打开」下拉菜单。结构固定：
+    /// 打开文件… / 打开文件夹… / 分隔线 / 这个文件夹里的曲目 ▸（扫过文件夹才有）/ 最近打开 ▸。
+    /// 调用点与旧版一致：构造、载入成功、移除一条、清空列表，另外加文件夹扫描完成。
+    /// </summary>
     private void RefreshRecentUi()
     {
-        if (BtnRecent == null) return;
-        if (BtnRecent.Flyout is not MenuFlyout menu) return;
+        if (BtnOpen?.Flyout is not MenuFlyout menu) return;
 
-        var files = _cfg.RecentFiles;
         menu.Items.Clear();
-        if (files.Count == 0)
-        {
-            // 空的时候按钮本身是灰的，这一条只是兜底（菜单已打开时列表被清空）
-            menu.Items.Add(new MenuItem { Header = "还没有打开过文件", IsEnabled = false });
-        }
-        else
-        {
-            foreach (string path in files)
-            {
-                var item = new MenuItem
-                {
-                    Header = System.IO.Path.GetFileName(path),   // 菜单里只显示文件名
-                    Tag = path,
-                };
-                Avalonia.Controls.ToolTip.SetTip(item, path);    // 悬浮显示完整路径
-                item.Click += RecentFile_Click;
-                menu.Items.Add(item);
-            }
-            menu.Items.Add(new Separator());
-            var clear = new MenuItem { Header = "清空列表" };
-            clear.Click += ClearRecent_Click;
-            menu.Items.Add(clear);
-        }
-        BtnRecent.IsEnabled = files.Count > 0;
+
+        var openFile = new MenuItem { Header = "打开文件…" };
+        openFile.Click += BtnOpen_Click;
+        menu.Items.Add(openFile);
+
+        var openFolder = new MenuItem { Header = "打开文件夹…" };
+        openFolder.Click += BtnOpenFolder_Click;
+        menu.Items.Add(openFolder);
+
+        menu.Items.Add(new Separator());
+
+        // 只在扫过文件夹之后出现（空结果不进菜单）
+        if (_folderFiles.Count > 0) menu.Items.Add(BuildFolderMenu());
+
+        menu.Items.Add(BuildRecentMenu());
     }
 
-    /// <summary>点「最近打开」里的某一项：先收起菜单，再走打开流程。</summary>
+    /// <summary>「最近打开 ▸」子菜单：内容与旧版那个平铺列表相同（文件名 + 完整路径 + 清空列表）。</summary>
+    private MenuItem BuildRecentMenu()
+    {
+        var root = new MenuItem { Header = "最近打开 ▸" };
+        var files = _cfg.RecentFiles;
+        if (files.Count == 0)
+        {
+            // 一次都没打开过：给一条禁用的说明，不留空菜单
+            root.Items.Add(new MenuItem { Header = "还没有打开过文件", IsEnabled = false });
+            return root;
+        }
+        foreach (string path in files)
+        {
+            var item = new MenuItem
+            {
+                Header = System.IO.Path.GetFileName(path),   // 菜单里只显示文件名
+                Tag = path,
+            };
+            Avalonia.Controls.ToolTip.SetTip(item, path);    // 悬浮显示完整路径
+            item.Click += RecentFile_Click;
+            root.Items.Add(item);
+        }
+        root.Items.Add(new Separator());
+        var clear = new MenuItem { Header = "清空列表" };
+        clear.Click += ClearRecent_Click;
+        root.Items.Add(clear);
+        return root;
+    }
+
+    /// <summary>点「最近打开 ▸」里的某一项：先收起菜单，再走打开流程。</summary>
     private void RecentFile_Click(object? sender, RoutedEventArgs e)
     {
         if (sender is not MenuItem mi || mi.Tag is not string path) return;
-        BtnRecent.Flyout?.Hide();
+        HideOpenMenu();
         _ = OpenRecentFileAsync(path);
     }
 
     /// <summary>
-    /// 打开一个历史路径。文件已不在就提示并移出列表；还在就走与「打开 MIDI 文件…」同一条链路，
+    /// 打开一个历史路径。文件已不在就提示并移出列表；还在就走与「打开文件…」同一条链路，
     /// 所以「有未导出的手动改动要先确认」的保护照旧生效。
     /// </summary>
     private async Task OpenRecentFileAsync(string path)
@@ -1228,7 +1396,7 @@ public partial class MainWindow : Window
     /// <summary>清空「最近打开」列表并落盘。</summary>
     private void ClearRecent_Click(object? sender, RoutedEventArgs e)
     {
-        BtnRecent.Flyout?.Hide();
+        HideOpenMenu();
         _cfg.ClearRecentFiles();
         SaveSettings();
         RefreshRecentUi();
@@ -1535,13 +1703,11 @@ public partial class MainWindow : Window
         _editing ? _editor.Notes.ToList() : ComputeAutoNotes();
 
     /// <summary>
-    /// 当前要演奏的音符（未移调）：把勾选的声部按优先级合并成一条单音线。
+    /// 当前要演奏的音符（未移调）：把勾选的声部按优先级合并成一条谱面 —— 演奏 MIDI 里的全部音。
     /// 「自动提取主旋律 / 人声旋律提取」已移除 —— 它们是黑盒猜测，猜错时用户无从下手；
     /// 现在卷帘可以直接看、直接改，比猜得准。
-    ///
-    /// 「保留和弦」不勾选时：先按合奏顺序合并多轨，再交给 MelodyExtractor 抽一条平滑 skyline 单音线，
-    /// 卷帘只显示留下的音（未保留的音不在返回值里，自然不显示）。
-    /// 固定顺序：原始音 → 提取 → 移调 → NoteMapper.Map。
+    /// 「保留和弦」开关与单音线提取档都已移除，行为固定为原来的勾选态（全部音都演奏）。
+    /// 固定顺序：原始音 → 合并 → 移调 → NoteMapper.Map。
     /// </summary>
     private List<RawNote> ComputeAutoNotes()
     {
@@ -1552,25 +1718,12 @@ public partial class MainWindow : Window
             return new List<RawNote>();
         }
 
-        List<RawNote> merged;
-        if (_chordOn)
-        {
-            var voices = new List<(int Rank, RawNote Note)>();
-            // Rank 就是声部序号（0 起），必须与左侧列表的 VoiceIndexOf 同口径：
-            // 音符写进 Voice 后，卷帘的颜色号就等于这里给的行号。
-            for (int k = 0; k < rows.Count; k++)
-                foreach (var n in rows[k].Candidate.Notes) voices.Add((k, n));  // 0 最优先
-            merged = NoteMapper.MergeVoicesByPriority(voices);
-        }
-        else
-        {
-            // 先按合奏顺序合并多轨，再抽一条平滑 skyline 单音线；打击乐按通道与轨道名一起排除
-            var voices = new List<(int Rank, string TrackName, RawNote Note)>();
-            for (int k = 0; k < rows.Count; k++)
-                foreach (var n in rows[k].Candidate.Notes) voices.Add((k, rows[k].Name, n));
-            if (voices.Count == 0) return new List<RawNote>();
-            merged = PlaybackEngine.ResolveNotes(voices, chordMode: false);
-        }
+        var voices = new List<(int Rank, RawNote Note)>();
+        // Rank 就是声部序号（0 起），必须与左侧列表的 VoiceIndexOf 同口径：
+        // 音符写进 Voice 后，卷帘的颜色号就等于这里给的行号。
+        for (int k = 0; k < rows.Count; k++)
+            foreach (var n in rows[k].Candidate.Notes) voices.Add((k, n));  // 0 最优先
+        var merged = NoteMapper.MergeVoicesByPriority(voices);
 
         // 「去除开头空拍」：整条旋律平移到第一个音从 0 秒开始（开头常有休止）
         if (ChkTrimLead.IsChecked == true)
@@ -1585,31 +1738,6 @@ public partial class MainWindow : Window
             _removedLeadSec = 0;
         }
         return merged;
-    }
-
-    /// <summary>和弦开关变化：写回设置，再刷新谱面与卷帘。</summary>
-    private async void ChordMode_Changed(object? sender, RoutedEventArgs e)
-    {
-        if (_revertingChord) return;   // RV-09：取消后回退勾选，忽略自触发的事件
-        bool on = ChkChordMode.IsChecked == true;
-        // RV-09：切换和弦会重建谱面并丢弃手动改动，先确认一次；取消则把勾选退回原值。
-        if (!await ConfirmDiscardEditsForActionAsync("改和弦开关"))
-        {
-            _revertingChord = true;
-            try { ChkChordMode.IsChecked = _chordOn; }
-            finally { _revertingChord = false; }
-            return;
-        }
-        _chordOn = on;
-        _cfg.ChordMode = _chordOn;
-        ScheduleSave();
-        if (_busy || _previewDeb is null) return;
-        _previewDeb.Stop();
-        DropEditsIfAny("改了和弦开关");
-        RefreshPreview();
-        InsertLog(_chordOn
-            ? "保留和弦：多声部按优先级合成，听感更饱满。"
-            : "已关闭和弦：只保留一条单音线，卷帘只显示被保留的音。");
     }
 
     private MappingResult MapAt(int transpose) =>
@@ -2308,9 +2436,16 @@ public partial class MainWindow : Window
         _previewSeconds = Math.Clamp(_previewSeconds, 0, totalSec);
         // 卷帘轴上留 2% 余量，末尾才好双击加音
         _noteCount = raw.Count;
-        // 绿=可演奏、灰=超出音域，由这份音高集合决定。
+        // 绿=有对应的键、灰=没有对应的键（或超出能弹范围），由这份音高集合决定。
+        // 【音高空间必须换算】卷帘里的音符是**未移调**的原谱：Roll.SetNotes 收的就是上面的 raw，
+        // 编辑、声轨配色也都在原谱空间（_editor.Notes / SetVoiceColors 同理）。
+        // 而 m.Notes 的 Pitch 是加过 CurrentTranspose 的发声音高，两边不换算就会错位：
+        // 移调 ≠ 0 时，本来有键、试听也有声的音会被画成灰色（灰条与「能不能弹」不符）。
         // 两条分支都必须更新它：编辑路径不经过 SetNotes，否则改完音高颜色会按旧集合算。
-        var inRangePitches = m.Notes.Where(n => n.InRange).Select(n => n.Pitch).Distinct().ToList();
+        int rollTranspose = CurrentTranspose;
+        var inRangePitches = m.Notes.Where(n => n.InRange)
+                                    .Select(n => n.Pitch - rollTranspose)
+                                    .Distinct().ToList();
         if (pushToRoll)
         {
             Roll.SetTempo(_parsed.SecondsPerBeat, _parsed.BeatsPerBar);
@@ -2457,8 +2592,8 @@ public partial class MainWindow : Window
         if (_removedLeadSec > 0.05)
             InsertLog($"已去除开头空拍 {_removedLeadSec:F1} 秒，旋律从第 0 秒开始。");
 
+        // 和弦开关已移除：谱面固定为「演奏 MIDI 里的全部音」（见 ComputeAutoNotes）。
         var engine = new PlaybackEngine();
-        engine.ChordMode = _chordOn;   // 与界面开关一致（谱面已按开关定好）
         _engine = engine;
         engine.Log += s => UiPost(() => InsertLog(s));
         engine.Finished += () => UiPost(OnEngineFinished);
@@ -2620,7 +2755,6 @@ public partial class MainWindow : Window
         BtnPreview.IsEnabled = !busy;
         CountdownCombo.IsEnabled = !busy;
         // 键位方案在演奏中不换：一轮演奏的按键表在开始时就已经算好（控件都在键位窗口里，这里只锁入口）
-        ChkChordMode.IsEnabled = !busy;
         if (BtnKeymap != null) BtnKeymap.IsEnabled = !busy;
         // 一键移调 / 导出的可用性统一由 UpdateActionButtons() 决定，这里不再覆盖。
         UpdateActionButtons();

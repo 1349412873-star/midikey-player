@@ -3,7 +3,11 @@ using MidiKeyPlayer.Midi;
 namespace MidiKeyPlayer.Engine;
 
 /// <summary>
-/// 平滑 skyline 单音提取（调研第 4.2 节的推荐档，也是「和弦开关」关档的唯一规则）。
+/// 平滑 skyline 单音提取（调研第 4.2 节的推荐档）。
+/// 【当前没有调用点，保留备查】它原来是「保留和弦」开关关档时的唯一规则。
+/// 该开关已移除，PlaybackEngine 里原来调用它的那一节（ChordMode / PlayedNotes /
+/// ResolveNotes 两个重载 / ApplyChordMode）也已整体删除，所以现在没有任何代码引用本类。
+/// 文件保留，便于以后要单音线时直接复用；新代码不要接这条路径，除非确实要重新引入单音线档。
 /// 输入复调音符，输出严格单音线：任意两音区间不重叠、按 Start 升序，可直接接 <see cref="NoteMapper.Map"/>。
 ///
 /// 规则：

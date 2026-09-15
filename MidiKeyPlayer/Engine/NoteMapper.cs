@@ -26,7 +26,11 @@ public sealed class MappedNote
     /// <summary>实际发声音高。规则固定为「有键就发、没键就不发」，命中时与 <see cref="Pitch"/> 相同。</summary>
     public int SoundingPitch { get; init; }
 
-    /// <summary>false → 不发声（超界丢音、键表里没有这个音、移调越界、键表为空）。</summary>
+    /// <summary>
+    /// false → 演奏时跳过这个音。四种原因：移调后超出 MIDI 音域 0–127、键表为空、
+    /// 超出能弹范围、键表里没有这个音。后两种合起来就是「当前方案里没有对应的键」，
+    /// 卷帘按它画灰色。
+    /// </summary>
     public bool InRange { get; init; }
 
     public string SkipReason { get; init; } = "";
@@ -43,7 +47,10 @@ public sealed class MappingResult
 
     public List<MappedNote> Notes { get; init; } = new();
 
+    /// <summary>有对应的键、演奏时会发声的音数。</summary>
     public int InRangeCount => Notes.Count(n => n.InRange);
+
+    /// <summary>没有对应的键（或超出能弹范围）而跳过的音数。卷帘画成灰色的就是它们。</summary>
     public int SkipCount => Notes.Count(n => !n.InRange);
 
     /// <summary>发声但音高被挪过的音数。现在恒为 0（不再有改音高的路径）。</summary>
@@ -54,6 +61,10 @@ public sealed class MappingResult
 /// 把主旋律 MIDI 音高映射成乐器按键。键位与音域全部读 <see cref="KeymapProfile.Current"/>：
 /// 能弹范围由键位推导（见 <see cref="KeymapProfile.ReachableExtent"/>），范围外的音固定不弹；
 /// 范围内的音只认精确命中 —— 有键就发、没键就不发，不按任何策略改音高。
+///
+/// 「没有对应的键」= 超出能弹范围，或能弹范围内键表里查不到这个音高。两者都是
+/// <see cref="MappedNote.InRange"/> = false：演奏与试听都跳过，卷帘画成灰色。
+/// 它不是「超出乐器音域」——音高完全可以在音域内，只是当前方案没给它配键。
 /// </summary>
 public static class NoteMapper
 {
@@ -159,9 +170,9 @@ public static class NoteMapper
             int want = p - shift;
             if (!profile.InRange(want))
             {
-                // 超出能弹范围：固定不弹，没有折八度开关
+                // 超出能弹范围：固定不弹，没有折八度开关。对用户来说同样是「没有对应的键」
                 result.Notes.Add(Skipped(p, n,
-                    $"超出能弹范围（{Music.SolfegeRange(lo, hi)}）"));
+                    $"超出能弹范围（{Music.SolfegeRange(lo, hi)}），没有对应的键"));
                 continue;
             }
 
@@ -203,8 +214,9 @@ public static class NoteMapper
     };
 
     /// <summary>
-    /// 多声部合奏合成单音线：同刻多个声部一起响时只保留编号最小（Rank 最小）的声部；
+    /// 多声部合奏按优先级合并成一条谱面：同刻多个声部一起响时只保留编号最小（Rank 最小）的声部；
     /// 低优先级音压在高优先级音尾音上 → 该段让位。
+    /// 它**不是** MelodyExtractor 那种单音线提取：这里不改音高、不丢旋律音，只裁决同时发声的声部。
     /// 输出的每个音都写上 <see cref="RawNote.Voice"/> = 它的 Rank（声部序号），
     /// 这样卷帘才知道「这个音属于哪条声轨」，不必再按音高猜。
     /// </summary>
