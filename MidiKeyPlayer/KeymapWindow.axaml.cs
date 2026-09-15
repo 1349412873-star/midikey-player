@@ -25,6 +25,9 @@ namespace MidiKeyPlayer;
 /// 按键绑定按行排：一行一串键帽，行尾一个「+」在这一行末尾加一个音，
 /// 最后一行下面一个「+」新增一行（比上一行高一个八度）。一行内绝不换行，列多了横向滚动。
 ///
+/// 键帽上左键整块可点：点哪里都是「按一个键」改这个键的绑定。改音高与解绑在**右键菜单**里
+/// （<see cref="CapBlock_ContextRequested"/>）：右键不占左键面积，点击命中不会被切碎。
+///
 /// 改动立即生效：写盘（<see cref="KeymapProfile.Save"/>）、刷新 <see cref="KeymapProfile.Current"/>、
 /// 再通过 <see cref="ApplyPath"/> 交回主窗（主窗自己决定记日志与刷卷帘）。
 /// 键位录入只挂窗口自己的 KeyDown 与 PointerPressed：窗口一关，等待态随窗口一起消失。
@@ -919,10 +922,20 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         return step;
     }
 
+    /// <summary>点右上角的「✕」：解绑。与右键菜单的「解绑这个键」走同一条。</summary>
     private void RowRemove_Click(object? sender, RoutedEventArgs e)
     {
         if (sender is not Control c || c.DataContext is not RowVM row) return;
         e.Handled = true;
+        UnbindCell(row);
+    }
+
+    /// <summary>
+    /// 解绑一颗键帽：从方案里删掉这条键位、从屏上的行里摘掉这一格，然后重排。
+    /// 右上角的「✕」与键帽右键菜单的「解绑这个键」共用这里。
+    /// </summary>
+    private void UnbindCell(RowVM row)
+    {
         if (ReferenceEquals(_row, row) || ReferenceEquals(_pending, row)) EndWaiting(false);
 
         if (row.Source != null)
@@ -933,6 +946,128 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
         _rows.Remove(row);
         row.Parent?.Cells.Remove(row);
         RebuildRows();
+    }
+
+    // ================= 键帽右键菜单：改音高 / 解绑 =================
+
+    /// <summary>
+    /// 键帽上点右键：弹出**这一颗键帽自己**的菜单（改音高… / 解绑这个键）。
+    ///
+    /// 为什么用右键菜单：整块左键已经用来「按一个键」了，再从方块里切一块当音高入口，
+    /// 就会回到上一轮的点击错位。右键不占左键的任何面积，方块仍然整块可点、点哪改哪。
+    ///
+    /// 等待按键时不弹菜单：这时的右键属于「绑鼠标右键」那条既有路径，
+    /// 由窗口上的 <see cref="Window_PointerPressed"/> 说了算；这里不插一手。
+    /// </summary>
+    private void CapBlock_ContextRequested(object? sender, ContextRequestedEventArgs e)
+    {
+        if (sender is not Control c || c.DataContext is not RowVM row) return;
+
+        // 先吃掉这一次右键请求：ContextRequested 同时走 Tunnel 与 Bubble，
+        // 不吃掉会在另一半路由上再进来一次，弹出两个叠着的菜单。
+        e.Handled = true;
+
+        if (ActiveRow() != null || ActiveFuncRow() != null) return;
+
+        BuildCapMenu(c, row).Open(c);
+    }
+
+    /// <summary>
+    /// 键帽的右键菜单。菜单每次现造，菜单项直接抓住**这颗**键帽（<see cref="RowVM"/>），
+    /// 不靠下标、不靠坐标，改的一定是右键点的那一颗。
+    /// </summary>
+    private ContextMenu BuildCapMenu(Control target, RowVM row)
+    {
+        var pitch = new MenuItem { Header = "改音高…" };
+        pitch.Click += (_, _) => ShowPitchPicker(target, row);
+
+        var unbind = new MenuItem { Header = "解绑这个键" };
+        unbind.Click += (_, _) => UnbindCell(row);
+
+        var menu = new ContextMenu();
+        menu.Items.Add(pitch);
+        menu.Items.Add(new Separator());
+        menu.Items.Add(unbind);
+        return menu;
+    }
+
+    /// <summary>
+    /// 音高列表：本方案实际能弹出来的音，升序，按简谱写（形如 1(do)、#4(fa)、1˙(do)）。
+    /// 当前那一颗高亮并滚到可见处；列表长时可上下滚动。选中即刻改音高并落盘。
+    /// </summary>
+    private void ShowPitchPicker(Control target, RowVM row)
+    {
+        if (row.Source == null)
+        {
+            Say("这一格还没绑键。先按一个键，再改音高。");
+            return;
+        }
+
+        var choices = PitchChoices(row.Pitch);
+        var list = new ListBox
+        {
+            ItemsSource = choices,
+            MinWidth = 130,
+            MaxHeight = 260,     // 列表长时滚动，不撑出屏幕
+            FontSize = 12.5,
+        };
+        // 先铺当前值、再挂事件：反过来的话「铺值」这一次选择会被当成用户选中，一弹开就把音高改了
+        int current = choices.IndexOf(NoteLabelOf(row.Pitch));
+        if (current >= 0) list.SelectedIndex = current;
+
+        var flyout = new Flyout { Content = list, Placement = PlacementMode.Bottom };
+        list.AttachedToVisualTree += (_, _) =>
+        {
+            if (list.SelectedIndex >= 0) list.ScrollIntoView(list.SelectedIndex);
+        };
+        list.SelectionChanged += (_, _) =>
+        {
+            if (list.SelectedItem is not string label) return;
+            flyout.Hide();
+            ApplyPitch(row, label);
+        };
+        // 等这一轮输入走完再弹列表：菜单项点完 ContextMenu 才关，立刻弹会被它一起收掉
+        Dispatcher.UIThread.Post(() => flyout.ShowAt(target), DispatcherPriority.Background);
+    }
+
+    /// <summary>
+    /// 音高列表的内容：本方案能弹到的音高，升序去重。includePitch 一定进列表 ——
+    /// 这一格当前的音高即使不在「能弹集合」里（键名认不出来时），也要能看见、能选中。
+    /// </summary>
+    private List<string> PitchChoices(int includePitch)
+    {
+        var pitches = new SortedSet<int>(_keymap.ReachablePitches())
+        {
+            Math.Clamp(includePitch, 0, 127),
+        };
+        return pitches.Select(NoteLabelOf).ToList();
+    }
+
+    /// <summary>
+    /// 把一颗键帽的音高改成列表里选中的那个：改写这条键位的 <see cref="KeyBinding.Offset"/>，
+    /// 再重排一次。重排会一起刷新方块大字、行标签的音域、底部统计三处。
+    /// </summary>
+    private void ApplyPitch(RowVM row, string label)
+    {
+        var source = row.Source;
+        if (source == null) return;
+
+        int pitch = PitchOfLabel(label, row.Pitch);
+        if (pitch == row.Pitch) return;
+
+        source.Offset = pitch - _keymap.BaseNote;
+        RebuildRows();
+        Apply($"{DisplayKeyText(source.Key)} 的音高已改到 {Music.SolfegeName(pitch)}。");
+    }
+
+    /// <summary>把列表里的「1(do)」换回音高数字。认不出来就保持原值。</summary>
+    private static int PitchOfLabel(string label, int fallback)
+    {
+        int i = label.IndexOf('(');
+        string name = (i > 0 ? label[..i] : label).Trim();
+        for (int p = 0; p <= 127; p++)
+            if (string.Equals(Music.SolfegeNames[p], name, StringComparison.Ordinal)) return p;
+        return fallback;
     }
 
     // ================= 功能键开关 =================
@@ -1592,11 +1727,13 @@ internal abstract class KeyCapRow : INotifyPropertyChanged
     {
         get
         {
-            if (_keyText.Length == 0) return "点这个方块，再按一个键，就把这个键绑到这个音。";
+            // 右键菜单没有可见入口，把它的存在写进提示气泡里
+            const string rightMenu = "右键这个方块可以改音高，也可以解绑。";
+            if (_keyText.Length == 0) return $"点这个方块，再按一个键，就把这个键绑到这个音。{rightMenu}";
             string extra = KeymapWindow.LongNameOf(_keyText);
             return extra.Length > 0
-                ? $"当前绑的是 {extra}。点一下再按一个键就能换绑。"
-                : "点这个方块，再按一个键，就把这个键绑到这个音。";
+                ? $"当前绑的是 {extra}。点一下再按一个键就能换绑。{rightMenu}"
+                : $"点这个方块，再按一个键，就把这个键绑到这个音。{rightMenu}";
         }
     }
 

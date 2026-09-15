@@ -44,7 +44,8 @@
       <Setter Property="Cursor" Value="Hand"/>
     </Style>
 
-    <!-- 键帽方块：整块就是一个按钮，点哪里都是「改这个键的绑定」。 -->
+    <!-- 键帽方块：整块就是一个按钮，左键点哪里都是「改这个键的绑定」。
+         改音高放在右键菜单里，不切方块、不占左键面积。 -->
     <Style Selector="Button.capBlock">
       <Setter Property="HorizontalContentAlignment" Value="Left"/>
       <Setter Property="VerticalContentAlignment" Value="Top"/>
@@ -185,15 +186,17 @@
                           <ItemsControl.ItemTemplate>
                             <DataTemplate>
                               <Grid Width="76" Height="58" Margin="0,0,6,0">
-                                <!-- 整块键帽就是一个按钮：点方块的任何位置都进入「按一个键」等待态。
+                                <!-- 整块键帽就是一个按钮：左键点方块的任何位置都进入「按一个键」等待态。
                                      大字是音高（数字上下的点表示八度），下沿是当前绑的键名。
-                                     等待中按钮内容换成「按一个键…」。右上角只留解绑的「✕」。 -->
+                                     等待中按钮内容换成「按一个键…」。右上角只留解绑的「✕」。
+                                     右键弹这个键自己的菜单（改音高… / 解绑这个键），左键不受影响。 -->
                                 <Border CornerRadius="8" BoxShadow="0 1 2 0 #140F1729"
                                         Background="{DynamicResource BrushSurface}"
                                         BorderBrush="{Binding BlockBorderBrush}"
                                         BorderThickness="{Binding BlockBorderThickness}">
                                   <Grid>
                                     <Button Classes="capBlock" Click="BlockKey_Click"
+                                            ContextRequested="CapBlock_ContextRequested"
                                             BorderBrush="{DynamicResource BrushBorderStrong}"
                                             BorderThickness="1" CornerRadius="8" Padding="6,3,6,4"
                                             ToolTip.Tip="{Binding CapTip}">
