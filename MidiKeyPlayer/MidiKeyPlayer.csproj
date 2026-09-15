@@ -16,7 +16,28 @@
     <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
     <InvariantGlobalization>false</InvariantGlobalization>
     <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
-    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+
+  <!-- 发布形态：Windows x64、自包含、单文件。只影响 build / publish 产物，不改目标框架。
+       写在这里（而不是只写在 build-win.sh 的命令行里），是为了让任何人直接执行
+       `dotnet publish MidiKeyPlayer.csproj -c Release` 也得到同样唯一的 exe，不会再产出
+       一堆松散文件。EnableCompressionInSingleFile 要求 SelfContained=true 才有意义。 -->
+  <PropertyGroup>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <!-- 不嵌入 PDB：单文件 exe 是唯一交付物，不带 .pdb 伴生文件。 -->
+    <DebugType>none</DebugType>
+    <!-- 不做裁剪（PublishTrimmed）。权衡过：上一轮实测开 partial 能把下载体积从 39.6 MB
+         压到 15.5 MB（见 midikey-audit\fixes\32-single-exe.md:21），收益很大，
+         但裁剪的两个风险来源都在产品主链路上：
+           1. Avalonia 的 XAML 绑定走反射（上面 AvaloniaUseCompiledBindingsByDefault=false）；
+           2. DryWetMidi 大量用反射。
+         两者都没有 trim 注解，一旦被裁到，表现是「开发版正常、发布版静默失效」，
+         正是傻瓜式软件最怕的故障。体积换稳定。
+         注：设置文件不构成理由 —— 它已经走源生成（AppConfig.cs 的 ConfigJson），不受裁剪影响。 -->
   </PropertyGroup>
 
   <ItemGroup>
@@ -26,8 +47,41 @@
     <PackageReference Include="Melanchall.DryWetMidi" Version="7.2.0" />
   </ItemGroup>
 
+  <!-- 原 App 图标资源。 -->
   <ItemGroup>
     <AvaloniaResource Include="Assets\app.ico" />
   </ItemGroup>
+
+  <!-- 合规文本：不再作为松散文件进包，一律嵌进 exe，随程序一起分发。
+       用 AvaloniaResource（不用 EmbeddedResource）的理由：
+         1. 用户要求资源能被程序直接读出来展示，AvaloniaResource 的资源可用
+            Avalonia.Platform.AssetLoader.Open(new Uri("avares://MidiKeyPlayer/..."))) 打开，
+            本仓库已有同样用法（MainWindow.axaml.cs 读 app.ico）。
+         2. EmbeddedResource + LogicalName 只能靠 Assembly.GetManifestResourceStream 读，
+            读取方式与现有代码不一致，Avalonia 打包单文件时也不参与其资源清单。
+       每条都显式写 <Link>，不用通配符：<Link> 决定 avares 资源路径，同时让「源文件缺失」
+       变成构建期硬错误，而不是悄悄少一个文件。Avalonia 官方确认支持 <Link>（LinkBase 不支持）。
+       资源路径（供 .cs 读取，见 midikey-audit\fixes\32-single-exe.md）：
+         avares://MidiKeyPlayer/Docs/更新说明.txt
+         avares://MidiKeyPlayer/Docs/THIRD-PARTY-NOTICES.md
+         avares://MidiKeyPlayer/Docs/LICENSE
+       源文件路径：LICENSE 与 THIRD-PARTY-NOTICES.md 在仓库根，更新说明在项目内 docs/。
+       源文件放在原处，只在这里挂进项目。
+       示例曲目不进包（用户明确要求发布里不放任何示例）。 -->
+  <ItemGroup>
+    <AvaloniaResource Include="docs\更新说明.txt" Link="Docs/更新说明.txt" />
+    <AvaloniaResource Include="..\THIRD-PARTY-NOTICES.md" Link="Docs/THIRD-PARTY-NOTICES.md" />
+    <AvaloniaResource Include="..\LICENSE" Link="Docs/LICENSE" />
+  </ItemGroup>
+
+  <!-- 发布目录只留一个 exe。DryWetMidi 包里带 macOS / Linux 的原生库（.dylib / .so），
+       它们不是 RID 限定的资产，publish 时会一起复制到 win-x64 输出，导致「多一个文件」。
+       这里在发布清单算完之后把它们剔掉；build-win.sh 里另有一道检查兜底。 -->
+  <Target Name="RemoveForeignNativeLibsFromPublish" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
+                             Condition="'%(Extension)' == '.dylib' Or '%(Extension)' == '.so'" />
+    </ItemGroup>
+  </Target>
 
 </Project>
