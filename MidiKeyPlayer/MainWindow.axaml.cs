@@ -111,6 +111,7 @@ public partial class MainWindow : Window
         ChkAutoMinimize.IsChecked = _cfg.AutoMinimizeOnPlay;
         TimingCombo.SelectedIndex = Math.Clamp(_cfg.TimingIndex, 0, 2);
         RefreshRecentUi();   // 「打开」下拉菜单按设置里的历史重建（含「最近打开」子菜单）
+        RefreshFolderUi();   // 没选过文件夹：左栏的文件夹曲目卡先隐藏（扫描完成后再显示）
 
         // 键位方案（Engine\KeymapProfile）：全局活动方案，实时演奏与文件播放共用。
         // 键位控件在独立的 KeymapWindow 里，主界面只显示方案名并提供一个入口按钮。
@@ -1134,15 +1135,22 @@ public partial class MainWindow : Window
         }
     }
 
-    // ================= 打开文件夹（列出文件夹里的 MIDI） =================
+    // ================= 打开文件夹（左栏常驻的「文件夹曲目」卡） =================
     //
     // 用户选一个文件夹，这里列出**这个文件夹本身**里的 MIDI（不进子目录），点一条直接载入。
-    // 扫描结果只放在内存里，不进设置文件、不改目录；菜单由 RefreshRecentUi() 重建。
+    // 列表呈现在左栏的 FolderCard 里（打开卡与轨道列表之间），不再是菜单里的子菜单。
+    // 扫描结果只放在内存里，不进设置文件、不改目录；卡的显隐与内容由 RefreshFolderUi() 统一刷新。
 
     private readonly List<string> _folderFiles = new();   // 上次选中的文件夹里的 MIDI（完整路径）
     private string _folderPath = "";                      // 上次选中的文件夹
-    private const int FolderMenuMax = 50;                 // 菜单最多列多少首，其余用禁用项说明
+    private const int FolderMenuMax = 50;                 // 卡片最多列多少首，其余用一条说明占位
     private static readonly string[] MidiExtensions = { ".mid", ".midi", ".kar", ".rmi" };
+
+    /// <summary>
+    /// 抑制标记：RefreshFolderUi() 程序化改 FolderList 的选中项时会触发 SelectionChanged，
+    /// 那一次不是用户点击，不该去载入文件。
+    /// </summary>
+    private bool _folderSyncing;
 
     /// <summary>「打开文件夹…」：选一个文件夹，扫描它本身。</summary>
     private async void BtnOpenFolder_Click(object? sender, RoutedEventArgs e)
@@ -1174,7 +1182,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 扫描文件夹**本身**（不递归子目录），收 .mid / .midi / .kar / .rmi，按文件名排序后重建菜单。
+    /// 扫描文件夹**本身**（不递归子目录），收 .mid / .midi / .kar / .rmi，按文件名排序后刷新左栏的曲目卡。
     /// 扫描结果留在 <see cref="_folderFiles"/> 里：载入成功后不清空，方便同一批曲子连续换。
     /// </summary>
     private void ScanMidiFolder(string path)
@@ -1192,23 +1200,23 @@ public partial class MainWindow : Window
         {
             _folderFiles.Clear();
             InsertLog($"读取文件夹失败：{ex.GetType().Name}: {ex.Message}");
-            RefreshRecentUi();
+            RefreshFolderUi();
             return;
         }
 
         if (_folderFiles.Count == 0)
         {
             InsertLog("这个文件夹里没有找到 MIDI 文件。");
-            RefreshRecentUi();
+            RefreshFolderUi();
             return;
         }
 
-        // 按文件名排序（忽略大小写）：菜单里显示的就是文件名，顺序与用户在资源管理器里看到的一致。
+        // 按文件名排序（忽略大小写）：卡片里显示的就是文件名，顺序与用户在资源管理器里看到的一致。
         _folderFiles.Sort((a, b) => string.Compare(
             System.IO.Path.GetFileName(a), System.IO.Path.GetFileName(b), StringComparison.OrdinalIgnoreCase));
 
-        InsertLog($"{dir.Name}：找到 {_folderFiles.Count} 首 MIDI，在「打开」菜单的「这个文件夹里的曲目」里选。");
-        RefreshRecentUi();
+        InsertLog($"{dir.Name}：找到 {_folderFiles.Count} 首 MIDI，已列在左侧的文件夹曲目里。");
+        RefreshFolderUi();
     }
 
     /// <summary>文件夹扫描只认这四种扩展名，与文件对话框的过滤器同一套。</summary>
@@ -1220,44 +1228,122 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 「这个文件夹里的曲目 ▸」子菜单：点一条就用与「打开文件…」完全相同的链路载入。
-    /// 超过 <see cref="FolderMenuMax"/> 首时只列前 50 首，末尾用一条禁用项说明还剩多少 ——
-    /// 200 首全塞进菜单会让弹出明显变卡。
+    /// 重建左栏「文件夹曲目」卡的内容与显隐。整块呈现都收在这里，调用点固定：
+    /// 扫描完成、载入一首之后、点「关闭」、以及窗口构造时隐藏。
+    ///
+    /// - 没选过文件夹：整块隐藏。
+    /// - 文件夹里没有 MIDI：卡仍然可见，只显示一行灰字，方便用户直接换一个目录。
+    /// - 每一条都是 ListBoxItem：Content = 文件名，Tag = 完整路径，悬浮提示 = 完整路径。
+    /// - 超过 <see cref="FolderMenuMax"/> 首只列前 50 首，末尾补一条不可点的「还有 N 首未列出」。
+    /// - 当前已载入的那一首在列表里，直接选中它（换歌后也会跟着走），所以一定有高亮标记。
     /// </summary>
-    private MenuItem BuildFolderMenu()
+    private void RefreshFolderUi()
     {
-        var root = new MenuItem { Header = "这个文件夹里的曲目 ▸" };
-        Avalonia.Controls.ToolTip.SetTip(root, _folderPath);
-        int shown = Math.Min(_folderFiles.Count, FolderMenuMax);
-        for (int i = 0; i < shown; i++)
+        if (FolderCard == null || FolderList == null) return;   // 构造早期的防御：控件还没建好
+
+        bool hasFolder = !string.IsNullOrEmpty(_folderPath);
+        FolderCard.IsVisible = hasFolder;
+        if (!hasFolder) return;
+
+        // 标题只写文件夹名；根目录（C:\ 这类）取不到名字时退回完整路径，不显示空标题
+        string trimmed = _folderPath.TrimEnd(
+            System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar);
+        string leaf = System.IO.Path.GetFileName(trimmed);
+        TxtFolderName.Text = leaf.Length > 0 ? leaf : _folderPath;
+        Avalonia.Controls.ToolTip.SetTip(TxtFolderName, _folderPath);   // 附加属性，必须走 SetTip
+
+        _folderSyncing = true;   // 下面改选中项会触发 SelectionChanged，那一次不是用户点击
+        try
         {
-            string path = _folderFiles[i];
-            var item = new MenuItem
+            FolderList.Items.Clear();
+            int shown = Math.Min(_folderFiles.Count, FolderMenuMax);
+            for (int i = 0; i < shown; i++)
+                FolderList.Items.Add(BuildFolderRow(_folderFiles[i]));
+
+            if (_folderFiles.Count > shown)
             {
-                Header = System.IO.Path.GetFileName(path),   // 菜单里只显示文件名
-                Tag = path,
-            };
-            Avalonia.Controls.ToolTip.SetTip(item, path);    // 悬浮显示完整路径
-            item.Click += FolderFile_Click;
-            root.Items.Add(item);
+                var more = new ListBoxItem
+                {
+                    Content = new TextBlock
+                    {
+                        Text = $"还有 {_folderFiles.Count - shown} 首未列出",
+                        FontSize = 12.5,
+                        Foreground = ResourceBrush("BrushTextMuted"),
+                    },
+                    IsEnabled = false,
+                    IsHitTestVisible = false,   // 占位说明，点不动
+                    Focusable = false,
+                };
+                FolderList.Items.Add(more);
+            }
+
+            TxtFolderEmpty.IsVisible = _folderFiles.Count == 0;
+
+            // 载入过的那一首保持选中：换歌后高亮跟着走，用户一眼看到当前是哪首。
+            FolderList.SelectedItem = null;
+            string current = _parsed?.FilePath ?? "";
+            if (current.Length > 0 && _folderFiles.Contains(current))
+            {
+                for (int i = 0; i < FolderList.Items.Count; i++)
+                {
+                    if (FolderList.Items[i] is ListBoxItem it && (it.Tag as string) == current)
+                    {
+                        FolderList.SelectedItem = it;
+                        break;
+                    }
+                }
+            }
         }
-        if (_folderFiles.Count > shown)
-            root.Items.Add(new MenuItem { Header = $"还有 {_folderFiles.Count - shown} 首未列出", IsEnabled = false });
-        return root;
+        finally
+        {
+            _folderSyncing = false;
+        }
     }
 
-    /// <summary>点「这个文件夹里的曲目」里的某一项：先收菜单，再走打开链路。</summary>
-    private void FolderFile_Click(object? sender, RoutedEventArgs e)
+    /// <summary>曲目卡里的一行：只显示文件名，完整路径放在 Tag 与悬浮提示里。</summary>
+    private static ListBoxItem BuildFolderRow(string path)
     {
-        if (sender is not MenuItem mi || mi.Tag is not string path) return;
-        HideOpenMenu();
+        var item = new ListBoxItem
+        {
+            Content = new TextBlock
+            {
+                Text = System.IO.Path.GetFileName(path),
+                FontSize = 12.5,
+                TextTrimming = Avalonia.Media.TextTrimming.CharacterEllipsis,
+            },
+            Tag = path,
+        };
+        Avalonia.Controls.ToolTip.SetTip(item, path);   // 悬浮显示完整路径
+        return item;
+    }
+
+    /// <summary>
+    /// 点曲目卡里的一行：走与「打开文件…」完全相同的链路
+    /// （<see cref="OpenFolderFileAsync"/> 里先确认未导出的手动改动，再 LoadMidiFile）。
+    /// 用 SelectionChanged 而不是 Click：键盘上下键也能换曲。
+    /// </summary>
+    private void FolderList_SelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_folderSyncing) return;                                        // 程序化选中，不是用户点的
+        if (FolderList?.SelectedItem is not ListBoxItem it) return;
+        if (it.Tag is not string path) return;                             // 「还有 N 首未列出」占位行
         _ = OpenFolderFileAsync(path);
+    }
+
+    /// <summary>曲目卡的「关闭」：清空列表并隐藏整块。磁盘上的文件不动。</summary>
+    private void FolderClose_Click(object? sender, RoutedEventArgs e)
+    {
+        _folderFiles.Clear();
+        _folderPath = "";
+        if (FolderList != null) FolderList.Items.Clear();
+        if (FolderCard != null) FolderCard.IsVisible = false;
+        InsertLog("已收起左侧的文件夹曲目。");
     }
 
     /// <summary>
     /// 打开文件夹列表里的一个路径。链路与「打开文件…」完全相同：
     /// 先确认未导出的手动改动，再 <see cref="LoadMidiFile"/>。
-    /// 文件已不在（改名或删除）就重扫一次，菜单跟着变成当前目录的内容。
+    /// 文件已不在（改名或删除）就重扫一次，卡片跟着变成当前目录的内容。
     /// </summary>
     private async Task OpenFolderFileAsync(string path)
     {
@@ -1307,9 +1393,10 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 重建「打开」下拉菜单。结构固定：
-    /// 打开文件… / 打开文件夹… / 分隔线 / 这个文件夹里的曲目 ▸（扫过文件夹才有）/ 最近打开 ▸。
-    /// 调用点与旧版一致：构造、载入成功、移除一条、清空列表，另外加文件夹扫描完成。
+    /// 重建「打开」下拉菜单。只有两级，结构固定：
+    /// 打开文件… / 打开文件夹… / 分隔线 / 最近打开 ▸（子菜单里 文件名… + 清空列表）。
+    /// 文件夹曲目不再进菜单，改由左栏的「文件夹曲目」卡呈现（见 <see cref="RefreshFolderUi"/>）。
+    /// 调用点与旧版一致：构造、载入成功、移除一条、清空列表。
     /// </summary>
     private void RefreshRecentUi()
     {
@@ -1326,9 +1413,6 @@ public partial class MainWindow : Window
         menu.Items.Add(openFolder);
 
         menu.Items.Add(new Separator());
-
-        // 只在扫过文件夹之后出现（空结果不进菜单）
-        if (_folderFiles.Count > 0) menu.Items.Add(BuildFolderMenu());
 
         menu.Items.Add(BuildRecentMenu());
     }
@@ -1435,6 +1519,8 @@ public partial class MainWindow : Window
             ChooseRecommendedTrack();
             RefreshPreview();
             RememberRecentFile(path);   // 载入成功才记：读不动的文件不进「最近打开」
+            // 曲目卡里给这首打上选中标记（当前已载入的那一首）；没选过文件夹时这一句什么也不做
+            RefreshFolderUi();
             return true;
         }
         catch (Exception ex)

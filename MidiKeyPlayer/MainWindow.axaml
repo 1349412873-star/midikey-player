@@ -88,17 +88,20 @@
       </Grid>
     </Border>
 
-    <!-- ================= 左栏：文件 → 轨道 ================= -->
-    <Grid Width="440" RowDefinitions="Auto,*" DockPanel.Dock="Left" Margin="0,0,12,0">
+    <!-- ================= 左栏：文件 → 文件夹曲目 → 轨道 ================= -->
+    <!-- 三行：打开卡 / 文件夹曲目卡（选过文件夹才可见）/ 轨道列表卡。
+         文件夹曲目卡放在打开卡与轨道列表之间：用户点「打开文件夹…」之后，
+         曲目就在这片常驻区域里，不用再去菜单里找。 -->
+    <Grid Width="440" RowDefinitions="Auto,Auto,*" DockPanel.Dock="Left" Margin="0,0,12,0">
 
       <Border Grid.Row="0" Classes="card">
         <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto">
           <!-- 打开入口：主体 = 文件选择对话框（一键，行为与旧按钮一样）；
-               右侧箭头 = 菜单（打开文件… / 打开文件夹… / 这个文件夹里的曲目 ▸ / 最近打开 ▸）。
+               右侧箭头 = 菜单，只有两级（打开文件… / 打开文件夹… / 分隔线 / 最近打开 ▸）。
                菜单项全部由 RefreshRecentUi() 重建，见 MainWindow.axaml.cs。 -->
           <SplitButton x:Name="BtnOpen" Content="打开 MIDI 文件 / 文件夹" Click="BtnOpen_Click"
                        Padding="14,7" FontSize="{DynamicResource FontBody}" VerticalAlignment="Center"
-                       ToolTip.Tip="点左边直接选文件；点右边的 ▾ 可以选文件夹（自动列出里面的 MIDI），或从最近打开里挑">
+                       ToolTip.Tip="点左边直接选文件；点右边的 ▾ 可以选文件夹（曲目列在下面那块区域），或从最近打开里挑">
             <SplitButton.Flyout>
               <MenuFlyout Placement="BottomEdgeAlignedLeft"/>
             </SplitButton.Flyout>
@@ -111,7 +114,41 @@
         </Grid>
       </Border>
 
-      <Border Grid.Row="1" Classes="card" Margin="{DynamicResource CardGap}" Padding="0">
+      <!-- ============ 文件夹曲目卡（常驻区域，选过文件夹才可见）============
+           整块由 RefreshFolderUi()（MainWindow.axaml.cs）填内容与控制显隐：
+           FolderList 里每一条都是代码建的 ListBoxItem（Content = Grid，Tag = 完整路径，
+           悬浮提示 = 完整路径）。点一条走 OpenFolderFileAsync —— 与「打开文件…」同一条链路，
+           「有未导出手动改动要先确认」的保护照旧生效。
+           列表高度封顶 150px，超出在卡内滚动；最多 50 首，其余合并成一条不可点的说明。 -->
+      <Border x:Name="FolderCard" Grid.Row="1" Classes="card" Margin="{DynamicResource CardGap}"
+              Padding="12,10" IsVisible="False">
+        <StackPanel Spacing="6">
+          <!-- 标题行：文件夹名（过长省略）+ 「关闭」小按钮 -->
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBlock x:Name="TxtFolderName" Text="" FontSize="{DynamicResource FontSmall}"
+                       FontWeight="SemiBold" VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis" ToolTip.Tip="当前列出曲目的文件夹"/>
+            <Button x:Name="BtnFolderClose" Grid.Column="1" Content="关闭" Margin="8,0,0,0"
+                    FontSize="{DynamicResource FontCaption}" Padding="10,3" Classes="secondary"
+                    Click="FolderClose_Click" ToolTip.Tip="收起这块区域（磁盘上的文件不会被动）"/>
+          </Grid>
+
+          <Grid>
+            <ListBox x:Name="FolderList" MaxHeight="150" SelectionMode="Single" Background="Transparent"
+                     SelectionChanged="FolderList_SelectionChanged"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     BorderThickness="0" Padding="0"/>
+            <!-- 空文件夹：这块卡仍然可见，方便用户直接换一个目录 -->
+            <TextBlock x:Name="TxtFolderEmpty" IsVisible="False"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" Margin="12,10"
+                       Classes="caption" TextWrapping="Wrap" TextAlignment="Center"
+                       Text="这个文件夹里没有找到 MIDI 文件。"/>
+          </Grid>
+        </StackPanel>
+      </Border>
+
+      <Border Grid.Row="2" Classes="card" Margin="{DynamicResource CardGap}" Padding="0">
         <Grid RowDefinitions="Auto,*">
           <!-- 列头 -->
           <Border Classes="tableHead">
@@ -353,72 +390,16 @@
         </Grid>
       </Border>
 
-      <!-- 选项区：分四行，避免一个 WrapPanel 里堆十几个控件 -->
+      <!-- ================= 选项区 =================
+           常驻的只有常用那几行（速度 / 移调 / 一键移调 / 自然音最多 / 倒计时 /
+           去除开头空拍 / 播放后自动最小化 / 键位设置）；十几项不常改的设置收进下面的
+           「高级」Expander，默认收起。右栏因此明显变短，卷帘分到的高度变多。
+           控件名、顺序、ToolTip、事件处理器一律没改，代码里的引用照旧。 -->
       <StackPanel x:Name="OptionsArea" Grid.Row="2" Spacing="8" Margin="{DynamicResource CardGap}">
 
-        <!-- 第 1 行：MIDI 设备接入。演奏中这一行用不到，所以放最上面，
-             勾了「实时演奏」就直接开着；不勾不影响任何文件播放功能。 -->
+        <!-- 常用项一张卡：两行 WrapPanel，宽度不够自动换行，不会互相压字。 -->
         <Border Classes="card" Padding="14,10">
-          <StackPanel Spacing="6">
-            <WrapPanel ItemSpacing="18" LineSpacing="8">
-              <CheckBox x:Name="ChkMidiLive" Content="MIDI 设备实时演奏" FontSize="{DynamicResource FontSmall}"
-                        VerticalAlignment="Center"
-                        ToolTip.Tip="接上 MIDI 键盘或打击垫，按键直接发送到目标程序。不勾选时本程序完全不碰这个设备"
-                        IsCheckedChanged="MidiLive_Changed"/>
-
-              <StackPanel x:Name="PanelMidiControls" Orientation="Horizontal" Spacing="14"
-                          IsVisible="False" VerticalAlignment="Center">
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                  <TextBlock Text="设备" Classes="label" MinWidth="34"/>
-                  <ComboBox x:Name="MidiDeviceCombo" Width="190" FontSize="{DynamicResource FontSmall}"
-                            VerticalAlignment="Center" SelectionChanged="MidiDevice_Changed"
-                            ToolTip.Tip="系统里的 MIDI 输入设备。热插拔后点右边「刷新」"/>
-                  <Button x:Name="BtnMidiRefresh" Content="刷新" FontSize="{DynamicResource FontSmall}"
-                          Padding="10,5" Classes="secondary" VerticalAlignment="Center"
-                          Click="MidiRefresh_Click" ToolTip.Tip="重新扫描 MIDI 输入设备"/>
-                </StackPanel>
-                <TextBlock x:Name="TxtMidiStatus" Text="未启用" Classes="value" VerticalAlignment="Center"
-                           Foreground="{DynamicResource BrushTextSecondary}"/>
-              </StackPanel>
-
-              <TextBlock x:Name="TxtMidiNoDevice" FontSize="{DynamicResource FontSmall}"
-                         VerticalAlignment="Center" Foreground="{DynamicResource BrushTextSecondary}"
-                         Text="没有检测到 MIDI 设备。接上键盘或打击垫后点「刷新」。"/>
-            </WrapPanel>
-
-            <WrapPanel x:Name="PanelMidiOptions" ItemSpacing="18" LineSpacing="8" IsVisible="False">
-              <StackPanel Orientation="Horizontal" Spacing="8">
-                <TextBlock Text="基准八度" Classes="label" MinWidth="56"
-                           ToolTip.Tip="乐器中音 do 所在的八度。设备上弹这个八度的 do 就是目标程序里的中音 do"/>
-                <Slider x:Name="SliderMidiOctave" Width="110" Minimum="1" Maximum="6" Value="4"
-                        TickFrequency="1" IsSnapToTickEnabled="True" VerticalAlignment="Center"
-                        ValueChanged="MidiOption_Changed"/>
-                <TextBlock x:Name="TxtMidiOctave" Text="1" Classes="value" Width="52"/>
-              </StackPanel>
-
-              <CheckBox x:Name="ChkMidiAutoFit" Content="自动贴合音域" FontSize="{DynamicResource FontSmall}"
-                        IsChecked="True" VerticalAlignment="Center"
-                        ToolTip.Tip="按最近弹过的音自动挑基准八度。设备跨几个八度弹时，低音不会因为超出音域而不响"
-                        IsCheckedChanged="MidiAutoFit_Changed"/>
-
-              <StackPanel Orientation="Horizontal" Spacing="8">
-                <TextBlock Text="力度下限" Classes="label" MinWidth="56"
-                           ToolTip.Tip="低于这个力度的音忽略。设备有抖动或触后噪声时调高"/>
-                <Slider x:Name="SliderMidiVelocity" Width="110" Minimum="1" Maximum="127" Value="1"
-                        TickFrequency="1" IsSnapToTickEnabled="True" VerticalAlignment="Center"
-                        ValueChanged="MidiOption_Changed"/>
-                <TextBlock x:Name="TxtMidiVelocity" Text="1" Classes="value" Width="30"/>
-              </StackPanel>
-            </WrapPanel>
-          </StackPanel>
-        </Border>
-
-        <!-- 第 1 行：演奏参数 + 输入设置 + 播放前自检。
-             三块原本各占一张卡，卡片自己的上下内边距与卡片间距合起来吃掉约 40px；
-             合成一张卡、用行间距分开，控件与顺序都不变。 -->
-        <Border Classes="card" Padding="14,10">
-          <Grid RowDefinitions="Auto,*" RowSpacing="8">
-          <StackPanel Grid.Row="0" Spacing="8">
+          <StackPanel Spacing="8">
             <WrapPanel ItemSpacing="22" LineSpacing="8">
             <StackPanel Orientation="Horizontal" Spacing="8">
               <TextBlock Text="速度" Classes="label" MinWidth="34"/>
@@ -448,6 +429,20 @@
                     Click="BtnNaturalTranspose_Click"
                     ToolTip.Tip="自动移调，让最多音落在自然音上（口琴等没有半音键的乐器用）。自然音同样多时取没有对应键的更少"/>
 
+            <!-- 键位设置：整套键位控件在独立窗口里，主界面只留这一个按钮 + 当前方案名。
+                 原来是这一行的最后一项，容易在窄窗口里折到下一行；现在紧跟在常用按钮后面。 -->
+            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+              <Button x:Name="BtnKeymap" Content="键位设置…" FontSize="{DynamicResource FontSmall}"
+                      Padding="12,5" Classes="secondary" VerticalAlignment="Center"
+                      Click="Keymap_Click"
+                      ToolTip.Tip="打开键位设置窗口：方案、按键绑定、功能键"/>
+              <TextBlock x:Name="TxtKeymapName" Classes="caption" VerticalAlignment="Center"
+                         MaxWidth="180" TextTrimming="CharacterEllipsis"
+                         ToolTip.Tip="当前键位方案名"/>
+            </StackPanel>
+            </WrapPanel>
+
+            <WrapPanel ItemSpacing="22" LineSpacing="8">
             <StackPanel Orientation="Horizontal" Spacing="8">
               <TextBlock Text="倒计时" Classes="label" MinWidth="46"/>
               <ComboBox x:Name="CountdownCombo" Width="104" FontSize="{DynamicResource FontSmall}" SelectedIndex="1"
@@ -466,70 +461,133 @@
                       IsChecked="True" VerticalAlignment="Center"
                       ToolTip.Tip="播放后窗口最小化。不勾选则保持原样（副屏看进度用，记得点一下目标窗口）"
                       IsCheckedChanged="AutoMinimize_Changed"/>
-
             </WrapPanel>
           </StackPanel>
+        </Border>
 
-        <!-- 第 2 行：输入设置 + 播放前自检。
-             「输入兼容」原本孤零零待在左栏底部，却和这里三个热键同属「怎么把键发出去」的配置；
-             合并成一张卡后右栏少一张卡，小窗口下卷帘能多分到高度。 -->
-          <StackPanel Grid.Row="1" Spacing="8">
-            <WrapPanel ItemSpacing="22" LineSpacing="8">
-              <StackPanel Orientation="Horizontal" Spacing="8">
-                <TextBlock Text="输入兼容" Classes="label"
-                           ToolTip.Tip="目标程序按键是按帧读取的：修饰键与音键间隔太短会被折进同一帧，导致漏音。这里给出时间余量。"/>
-                <ComboBox x:Name="TimingCombo" Width="150" FontSize="{DynamicResource FontSmall}"
-                          VerticalAlignment="Center" SelectionChanged="Timing_Changed"
-                          ToolTip.Tip="稳健=给30fps/掉帧留余量；标准=60fps 推荐；极限=高帧率下跟快歌。若仍漏音请选「稳健」。"/>
+        <!-- ================= 高级（默认收起） =================
+             里面是不常改的设置：MIDI 设备实时演奏整张卡、输入兼容、三个热键、
+             导出按键表、播放前自检。控件本身与原来逐个相同（名字、顺序、ToolTip、
+             事件处理器都没动），只是换了父容器。Expander 收起时里面的控件仍然存在，
+             所以代码给 TxtCheckHint / TxtMidiStatus 这类控件赋值不会出错。 -->
+        <Expander x:Name="AdvancedExpander" IsExpanded="False" VerticalAlignment="Top">
+          <Expander.Header>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Text="高级" FontSize="{DynamicResource FontSmall}" FontWeight="SemiBold"
+                         VerticalAlignment="Center"/>
+              <TextBlock Text="设备接入、输入兼容、热键、导出、自检" Classes="caption"
+                         VerticalAlignment="Center"/>
+            </StackPanel>
+          </Expander.Header>
+
+          <StackPanel Spacing="10" Margin="0,4,0,0">
+
+            <!-- MIDI 设备接入。演奏中这一行用不到；勾了「实时演奏」就直接开着，
+                 不勾不影响任何文件播放功能。 -->
+            <Border Classes="card" Padding="14,10">
+              <StackPanel Spacing="6">
+                <WrapPanel ItemSpacing="18" LineSpacing="8">
+                  <CheckBox x:Name="ChkMidiLive" Content="MIDI 设备实时演奏" FontSize="{DynamicResource FontSmall}"
+                            VerticalAlignment="Center"
+                            ToolTip.Tip="接上 MIDI 键盘或打击垫，按键直接发送到目标程序。不勾选时本程序完全不碰这个设备"
+                            IsCheckedChanged="MidiLive_Changed"/>
+
+                  <StackPanel x:Name="PanelMidiControls" Orientation="Horizontal" Spacing="14"
+                              IsVisible="False" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <TextBlock Text="设备" Classes="label" MinWidth="34"/>
+                      <ComboBox x:Name="MidiDeviceCombo" Width="190" FontSize="{DynamicResource FontSmall}"
+                                VerticalAlignment="Center" SelectionChanged="MidiDevice_Changed"
+                                ToolTip.Tip="系统里的 MIDI 输入设备。热插拔后点右边「刷新」"/>
+                      <Button x:Name="BtnMidiRefresh" Content="刷新" FontSize="{DynamicResource FontSmall}"
+                              Padding="10,5" Classes="secondary" VerticalAlignment="Center"
+                              Click="MidiRefresh_Click" ToolTip.Tip="重新扫描 MIDI 输入设备"/>
+                    </StackPanel>
+                    <TextBlock x:Name="TxtMidiStatus" Text="未启用" Classes="value" VerticalAlignment="Center"
+                               Foreground="{DynamicResource BrushTextSecondary}"/>
+                  </StackPanel>
+
+                  <TextBlock x:Name="TxtMidiNoDevice" FontSize="{DynamicResource FontSmall}"
+                             VerticalAlignment="Center" Foreground="{DynamicResource BrushTextSecondary}"
+                             Text="没有检测到 MIDI 设备。接上键盘或打击垫后点「刷新」。"/>
+                </WrapPanel>
+
+                <WrapPanel x:Name="PanelMidiOptions" ItemSpacing="18" LineSpacing="8" IsVisible="False">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="基准八度" Classes="label" MinWidth="56"
+                               ToolTip.Tip="乐器中音 do 所在的八度。设备上弹这个八度的 do 就是目标程序里的中音 do"/>
+                    <Slider x:Name="SliderMidiOctave" Width="110" Minimum="1" Maximum="6" Value="4"
+                            TickFrequency="1" IsSnapToTickEnabled="True" VerticalAlignment="Center"
+                            ValueChanged="MidiOption_Changed"/>
+                    <TextBlock x:Name="TxtMidiOctave" Text="1" Classes="value" Width="52"/>
+                  </StackPanel>
+
+                  <CheckBox x:Name="ChkMidiAutoFit" Content="自动贴合音域" FontSize="{DynamicResource FontSmall}"
+                            IsChecked="True" VerticalAlignment="Center"
+                            ToolTip.Tip="按最近弹过的音自动挑基准八度。设备跨几个八度弹时，低音不会因为超出音域而不响"
+                            IsCheckedChanged="MidiAutoFit_Changed"/>
+
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="力度下限" Classes="label" MinWidth="56"
+                               ToolTip.Tip="低于这个力度的音忽略。设备有抖动或触后噪声时调高"/>
+                    <Slider x:Name="SliderMidiVelocity" Width="110" Minimum="1" Maximum="127" Value="1"
+                            TickFrequency="1" IsSnapToTickEnabled="True" VerticalAlignment="Center"
+                            ValueChanged="MidiOption_Changed"/>
+                    <TextBlock x:Name="TxtMidiVelocity" Text="1" Classes="value" Width="30"/>
+                  </StackPanel>
+                </WrapPanel>
               </StackPanel>
+            </Border>
 
-              <StackPanel Orientation="Horizontal" Spacing="8">
-                <TextBlock Text="控制热键" Classes="label"
-                           ToolTip.Tip="一个键四用：空闲=开始，播放=暂停，暂停=继续，倒计时=取消"/>
-                <ComboBox x:Name="HotkeyControlCombo" Width="86" FontSize="{DynamicResource FontSmall}"
-                          VerticalAlignment="Center" SelectionChanged="Hotkey_Changed"
-                          ToolTip.Tip="默认 F6"/>
-              </StackPanel>
+            <!-- 输入兼容 + 三个热键 + 导出按键表。
+                 「输入兼容」原本孤零零待在左栏底部，却和三个热键同属「怎么把键发出去」的配置；
+                 合并成一张卡后右栏少一张卡，小窗口下卷帘能多分到高度。 -->
+            <Border Classes="card" Padding="14,10">
+              <WrapPanel ItemSpacing="22" LineSpacing="8">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="输入兼容" Classes="label"
+                             ToolTip.Tip="目标程序按键是按帧读取的：修饰键与音键间隔太短会被折进同一帧，导致漏音。这里给出时间余量。"/>
+                  <ComboBox x:Name="TimingCombo" Width="150" FontSize="{DynamicResource FontSmall}"
+                            VerticalAlignment="Center" SelectionChanged="Timing_Changed"
+                            ToolTip.Tip="稳健=给30fps/掉帧留余量；标准=60fps 推荐；极限=高帧率下跟快歌。若仍漏音请选「稳健」。"/>
+                </StackPanel>
 
-              <StackPanel Orientation="Horizontal" Spacing="8">
-                <TextBlock Text="后退热键" Classes="label"
-                           ToolTip.Tip="按一下后退 5 秒。播放中跳转可能让目标程序侧乐器卡音"/>
-                <ComboBox x:Name="HotkeyRewindCombo" Width="86" FontSize="{DynamicResource FontSmall}"
-                          VerticalAlignment="Center" SelectionChanged="Hotkey_Changed"
-                          ToolTip.Tip="默认 F5"/>
-              </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="控制热键" Classes="label"
+                             ToolTip.Tip="一个键四用：空闲=开始，播放=暂停，暂停=继续，倒计时=取消"/>
+                  <ComboBox x:Name="HotkeyControlCombo" Width="86" FontSize="{DynamicResource FontSmall}"
+                            VerticalAlignment="Center" SelectionChanged="Hotkey_Changed"
+                            ToolTip.Tip="默认 F6"/>
+                </StackPanel>
 
-              <StackPanel Orientation="Horizontal" Spacing="8">
-                <TextBlock Text="前进热键" Classes="label"
-                           ToolTip.Tip="按一下前进 5 秒。播放中跳转可能让目标程序侧乐器卡音"/>
-                <ComboBox x:Name="HotkeyForwardCombo" Width="86" FontSize="{DynamicResource FontSmall}"
-                          VerticalAlignment="Center" SelectionChanged="Hotkey_Changed"
-                          ToolTip.Tip="默认 F7"/>
-              </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="后退热键" Classes="label"
+                             ToolTip.Tip="按一下后退 5 秒。播放中跳转可能让目标程序侧乐器卡音"/>
+                  <ComboBox x:Name="HotkeyRewindCombo" Width="86" FontSize="{DynamicResource FontSmall}"
+                            VerticalAlignment="Center" SelectionChanged="Hotkey_Changed"
+                            ToolTip.Tip="默认 F5"/>
+                </StackPanel>
 
-              <Button x:Name="BtnExport" Content="导出按键表 ▾" FontSize="{DynamicResource FontSmall}"
-                      Padding="12,5" Classes="secondary" VerticalAlignment="Center" IsEnabled="False"
-                      ToolTip.Tip="导出按键时序，与实际演奏一致">
-                <Button.Flyout>
-                  <MenuFlyout Placement="Bottom">
-                    <MenuItem Header="罗技 G HUB 脚本 (.lua)" Click="ExportGhub_Click"/>
-                    <MenuItem Header="通用 CSV (.csv)" Click="ExportCsv_Click"/>
-                  </MenuFlyout>
-                </Button.Flyout>
-              </Button>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="前进热键" Classes="label"
+                             ToolTip.Tip="按一下前进 5 秒。播放中跳转可能让目标程序侧乐器卡音"/>
+                  <ComboBox x:Name="HotkeyForwardCombo" Width="86" FontSize="{DynamicResource FontSmall}"
+                            VerticalAlignment="Center" SelectionChanged="Hotkey_Changed"
+                            ToolTip.Tip="默认 F7"/>
+                </StackPanel>
 
-              <!-- 键位设置入口。整套键位控件都搬进了独立窗口，主界面只留这一个按钮 + 当前方案名，
-                   中间占 `*` 的钢琴卷帘才能拿回完整高度。 -->
-              <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                <Button x:Name="BtnKeymap" Content="键位设置…" FontSize="{DynamicResource FontSmall}"
-                        Padding="12,5" Classes="secondary" VerticalAlignment="Center"
-                        Click="Keymap_Click"
-                        ToolTip.Tip="打开键位设置窗口：方案、按键绑定、功能键"/>
-                <TextBlock x:Name="TxtKeymapName" Classes="caption" VerticalAlignment="Center"
-                           MaxWidth="180" TextTrimming="CharacterEllipsis"
-                           ToolTip.Tip="当前键位方案名"/>
-              </StackPanel>
-            </WrapPanel>
+                <Button x:Name="BtnExport" Content="导出按键表 ▾" FontSize="{DynamicResource FontSmall}"
+                        Padding="12,5" Classes="secondary" VerticalAlignment="Center" IsEnabled="False"
+                        ToolTip.Tip="导出按键时序，与实际演奏一致">
+                  <Button.Flyout>
+                    <MenuFlyout Placement="Bottom">
+                      <MenuItem Header="罗技 G HUB 脚本 (.lua)" Click="ExportGhub_Click"/>
+                      <MenuItem Header="通用 CSV (.csv)" Click="ExportCsv_Click"/>
+                    </MenuFlyout>
+                  </Button.Flyout>
+                </Button>
+              </WrapPanel>
+            </Border>
 
             <!-- 播放前自检：通过打勾、未通过打叉。WrapPanel 让长提示自动换行，不被卡片右边裁掉 -->
             <Border Background="{DynamicResource BrushSurfaceAlt}" CornerRadius="8" Padding="10,7">
@@ -557,8 +615,7 @@
               </StackPanel>
             </Border>
           </StackPanel>
-          </Grid>
-        </Border>
+        </Expander>
       </StackPanel>
     </Grid>
   </DockPanel>

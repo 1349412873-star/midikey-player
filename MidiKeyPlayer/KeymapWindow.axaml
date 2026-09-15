@@ -160,7 +160,7 @@
               <TextBlock Text="按键绑定" Classes="sectionLabel" FontWeight="SemiBold"
                          VerticalAlignment="Center"/>
               <TextBlock Classes="caption" VerticalAlignment="Center"
-                         Text="数字上方的点 = 高音，下方的点 = 低音"/>
+                         Text="数字上方的点 = 高音，下方的点 = 低音。左键点键帽 = 改绑按键，右键键帽 = 改音高或解绑"/>
             </StackPanel>
 
             <!-- 一条绑都没有时的灰字说明。加行按钮只留下面那一个（曾经这里还有一个「+ 新建第一行」，与它重复） -->
