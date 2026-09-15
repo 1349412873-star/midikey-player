@@ -1,5 +1,4 @@
 using System.Text;
-using Avalonia.Input;
 using MidiKeyPlayer.Engine;
 using MidiKeyPlayer.Midi;
 
@@ -169,108 +168,24 @@ internal static class GameSelfTest
         return true;
     }
 
-    // ================= 键名翻译 =================
+    // ================= 键名 =================
 
     /// <summary>
-    /// 键盘键 / 鼠标键 → 键名这条链路。每个键名都必须是方案认得的。
+    /// 键名这条链路：方案认不认这个名字（<see cref="KeymapProfile.IsKnownKeyName"/>），
+    /// 以及键名能不能换成字符（<see cref="KeymapProfile.KeyCharOf"/>）。每个键名都必须是方案认得的。
     ///
-    /// 翻译函数原在 Input\GameKeyMap.cs（音游认键用的），音游删掉后搬到这里：
-    /// 自检需要它，而方案自己的 IsKnownKeyName / KeyCharOf 才是被断言的对象。
+    /// 这里不再自己写一份「Avalonia 按键 → 键名」的翻译。原来那份是 Input\GameKeyMap.cs
+    /// （音游认键用）搬过来的副本，只被自检调用，断言的是它自己，覆盖不到产品代码：
+    /// 生产里录制按键走 KeymapWindow 的 KeyLabelOf / ModifierNameOf，键名归一化走
+    /// <see cref="KeymapProfile.CanonicalKeyName"/>。副本和依赖它的断言一起删掉，
+    /// 原因与取舍见 midikey-audit\fixes\42-leftovers.md（LF-09）。
     /// </summary>
     private static void TestKeyMapNames()
     {
-        int bad = 0;
-        for (Key k = Key.A; k <= Key.Z; k++)
-            if (!IsUsableName(KeyNameOf(k))) bad++;
-        Check("键名：A-Z 全部认得", bad == 0, $"认不出 {bad} 个");
-
-        bad = 0;
-        for (Key k = Key.D0; k <= Key.D9; k++)
-            if (!IsUsableName(KeyNameOf(k))) bad++;
-        Check("键名：主键盘 0-9 全部认得", bad == 0, $"认不出 {bad} 个");
-
-        bad = 0;
-        for (Key k = Key.NumPad0; k <= Key.NumPad9; k++)
-            if (!IsUsableName(KeyNameOf(k))) bad++;
-        Check("键名：小键盘 0-9 全部认得", bad == 0, $"认不出 {bad} 个");
-
-        var punct = new (string Want, Key Code)[]
-        {
-            (",", Key.OemComma), (".", Key.OemPeriod), (";", Key.OemSemicolon),
-            ("'", Key.OemQuotes), ("/", Key.OemQuestion), ("\\", Key.OemBackslash),
-            ("[", Key.OemOpenBrackets), ("]", Key.OemCloseBrackets),
-            ("-", Key.OemMinus), ("=", Key.OemPlus), ("`", Key.OemTilde),
-        };
-        bool punctOk = true;
-        string punctBad = "";
-        foreach (var (want, code) in punct)
-        {
-            string got = KeyNameOf(code);
-            if (got != want || !IsUsableName(got))
-            {
-                punctOk = false;
-                punctBad += $"{code}→「{got}」应为「{want}」 ";
-            }
-        }
-        Check("键名：标点全部认得且对得上", punctOk, punctBad);
-
-        // 同一条反斜杠键在 Avalonia 里有两个枚举值，必须映到同一个键名
-        Check("键名：反斜杠两个枚举值同键名",
-              KeyNameOf(Key.OemBackslash) == "\\" && KeyNameOf(Key.OemPipe) == "\\",
-              $"OemBackslash=「{KeyNameOf(Key.OemBackslash)}」"
-              + $"OemPipe=「{KeyNameOf(Key.OemPipe)}」");
-
-        var named = new[]
-        {
-            Key.Space, Key.Enter, Key.Tab, Key.Back, Key.Escape,
-            Key.LeftShift, Key.RightShift, Key.LeftCtrl, Key.RightCtrl,
-            Key.LeftAlt, Key.RightAlt, Key.System,
-            Key.PageUp, Key.PageDown, Key.Home, Key.End, Key.Insert, Key.Delete,
-            Key.Up, Key.Down, Key.Left, Key.Right,
-            Key.F1, Key.F2, Key.F6, Key.F12,
-        };
-        bool namedOk = true;
-        string namedBad = "";
-        foreach (var k in named)
-        {
-            string got = KeyNameOf(k);
-            if (!IsUsableName(got)) { namedOk = false; namedBad += $"{k}→「{got}」 "; }
-        }
-        Check("键名：命名键全部认得", namedOk, namedBad);
-
-        // 单独按 Alt：Windows 上报的是 Key.System，只能靠按住的修饰键认
-        Check("键名：Key.System + Alt = Alt",
-              KeyNameOf(Key.System, KeyModifiers.Alt) == "Alt",
-              $"实际「{KeyNameOf(Key.System, KeyModifiers.Alt)}」");
-        Check("键名：Key.System 不带修饰键也认作 Alt（老路径不丢键）",
-              KeyNameOf(Key.System) == "Alt", $"实际「{KeyNameOf(Key.System)}」");
-        Check("键名：Key.System + Ctrl = Ctrl",
-              KeyNameOf(Key.System, KeyModifiers.Control) == "Ctrl",
-              $"实际「{KeyNameOf(Key.System, KeyModifiers.Control)}」");
-        Check("键名：Key.System + Shift = Shift",
-              KeyNameOf(Key.System, KeyModifiers.Shift) == "Shift",
-              $"实际「{KeyNameOf(Key.System, KeyModifiers.Shift)}」");
-
-        Check("键名：鼠标三键认得",
-              IsUsableName(MouseNameOf(PointerUpdateKind.LeftButtonPressed))
-              && IsUsableName(MouseNameOf(PointerUpdateKind.RightButtonReleased))
-              && IsUsableName(MouseNameOf(PointerUpdateKind.MiddleButtonPressed)),
-              $"「{MouseNameOf(PointerUpdateKind.LeftButtonPressed)}」"
-              + $"「{MouseNameOf(PointerUpdateKind.RightButtonReleased)}」"
-              + $"「{MouseNameOf(PointerUpdateKind.MiddleButtonPressed)}」");
-
         // 鼠标键要能被方案认出来，否则鼠标修饰键永远匹配不上
         Check("键名：鼠标三键在方案里可用",
               IsUsableName("MouseLeft") && IsUsableName("MouseRight") && IsUsableName("MouseMiddle"),
               "MouseLeft / MouseRight / MouseMiddle");
-
-        // 认不出的键必须给空串，调用方靠这个跳过
-        Check("键名：认不出的键返回空串",
-              KeyNameOf(Key.None) == "" && KeyNameOf((Key)0x7FFF) == "",
-              $"None=「{KeyNameOf(Key.None)}」 0x7FFF=「{KeyNameOf((Key)0x7FFF)}」");
-        Check("键名：认不出的鼠标事件返回空串",
-              MouseNameOf(PointerUpdateKind.Other) == "",
-              $"「{MouseNameOf(PointerUpdateKind.Other)}」");
 
         // 内置三套预设都不带功能键：这是设计（不是所有方案都需要，界面另有启用开关）。
         // 所以这里断言「空着，或者写的是认得的键名」，而不是强制三个都非空。
@@ -351,85 +266,6 @@ internal static class GameSelfTest
               && Music.SolfegeNames[72] == "1\u02D9",
               $"长度 {Music.SolfegeNames.Length}");
     }
-
-    // ================= 键名翻译实现 =================
-
-    /// <summary>
-    /// 键盘键 + 当时按住的修饰键 → 方案键名。认不出返回空串。
-    ///
-    /// Windows 上单独按 Alt 时 Avalonia 报的是 <see cref="Key.System"/>，不是
-    /// <see cref="Key.LeftAlt"/> / <see cref="Key.RightAlt"/>；Ctrl / Shift 也会走同一个值。
-    /// 这时只能靠按住的修饰键认出来。少了这一支，绑在 Alt 上的音键永远匹配不上。
-    /// </summary>
-    private static string KeyNameOf(Key key, KeyModifiers modifiers = KeyModifiers.None)
-    {
-        if (key == Key.System)
-        {
-            if (modifiers.HasFlag(KeyModifiers.Control)) return "Ctrl";
-            if (modifiers.HasFlag(KeyModifiers.Shift)) return "Shift";
-            return "Alt";
-        }
-
-        if (key >= Key.A && key <= Key.Z)
-            return ((char)('A' + (key - Key.A))).ToString();
-
-        if (key >= Key.D0 && key <= Key.D9)
-            return ((char)('0' + (key - Key.D0))).ToString();
-
-        if (key >= Key.NumPad0 && key <= Key.NumPad9)
-            return "NumPad" + (key - Key.NumPad0);
-
-        if (key >= Key.F1 && key <= Key.F12)
-            return "F" + (key - Key.F1 + 1);
-
-        return key switch
-        {
-            Key.Space => "Space",
-            Key.Enter => "Enter",
-            Key.Tab => "Tab",
-            Key.Back => "Back",
-            Key.Escape => "Escape",
-            Key.LeftShift or Key.RightShift => "Shift",
-            Key.LeftCtrl or Key.RightCtrl => "Ctrl",
-            Key.LeftAlt or Key.RightAlt => "Alt",
-            Key.PageUp => "PageUp",
-            Key.PageDown => "PageDown",
-            Key.Home => "Home",
-            Key.End => "End",
-            Key.Insert => "Insert",
-            Key.Delete => "Delete",
-            Key.Up => "Up",
-            Key.Down => "Down",
-            Key.Left => "Left",
-            Key.Right => "Right",
-
-            // 标点：与 KeymapProfile 里允许的单字符键一一对应
-            Key.OemComma => ",",
-            Key.OemPeriod => ".",
-            Key.OemSemicolon => ";",
-            Key.OemQuotes => "'",
-            Key.OemQuestion => "/",
-            // 同一条反斜杠键在两处枚举值不同：键位窗口录的是 OemPipe，这里原来只认
-            // OemBackslash。两个枚举值都映到同一个键名，免得一边录的键另一边收不到。
-            Key.OemBackslash or Key.OemPipe => "\\",
-            Key.OemOpenBrackets => "[",
-            Key.OemCloseBrackets => "]",
-            Key.OemMinus => "-",
-            Key.OemPlus => "=",
-            Key.OemTilde => "`",
-
-            _ => "",
-        };
-    }
-
-    /// <summary>鼠标键 → 方案键名。非鼠标事件返回空串。</summary>
-    private static string MouseNameOf(PointerUpdateKind kind) => kind switch
-    {
-        PointerUpdateKind.LeftButtonPressed or PointerUpdateKind.LeftButtonReleased => "MouseLeft",
-        PointerUpdateKind.RightButtonPressed or PointerUpdateKind.RightButtonReleased => "MouseRight",
-        PointerUpdateKind.MiddleButtonPressed or PointerUpdateKind.MiddleButtonReleased => "MouseMiddle",
-        _ => "",
-    };
 
     // ================= 断言 =================
 

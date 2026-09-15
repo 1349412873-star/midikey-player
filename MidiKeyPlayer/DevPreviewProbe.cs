@@ -286,6 +286,8 @@ public partial class MainWindow
         PreviewJitterProbe.WriteReport();
         WriteProbeSummary(reason);
         try { File.AppendAllText(ProbeEnv("MIDIKEY_PREVIEW_PROBE_OUT"), "[probe] 探针退出" + Environment.NewLine); } catch { }
+        // A19：退出前走一遍主窗的显式清理（停试听与播放、停热键与 MIDI 服务、释放按键、移除托盘）
+        DevCleanUpForExit();
         Environment.Exit(0);
     }
 }

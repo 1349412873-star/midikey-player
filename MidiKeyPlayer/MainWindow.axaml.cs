@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Selection;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
@@ -34,12 +35,19 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _previewDeb;
     private int _countdownLeft;
     private bool _busy;
+
     private bool _seeking;          // 用户正在拖进度条
     private List<MappedNote> _previewNotes = new();   // 全量音符（含超音域），供卷帘与定位使用
     private double _previewSeconds;                   // 未播放时的定位秒数
     private int _noteCount;                           // 当前谱面音符数（避免每次点击都重算）
     private readonly ScoreEditor _editor = new();     // 手动编辑后的谱面
     private bool _editing;                            // true = 用编辑结果，不再用自动提取
+    private bool _editsExported;                      // true = 这份手动改动已经导出过 MIDI（UI-01 / UI-02）
+    private bool _discardPrompting;                   // RV-09：丢弃改动确认框正在显示，不重复弹
+    private bool _revertingTrack;                     // RV-09：取消后回退主旋律轨选中，忽略自触发的事件
+    private bool _revertingChord;                     // RV-09：取消后回退和弦勾选，忽略自触发的事件
+    private bool _revertingMix;                       // RV-09：取消后回退合奏勾选，忽略自触发的事件
+    private bool _exitConfirming;                     // 关窗确认框正在显示，避免连点 × 弹多个
     private bool _helpOn;                             // 卷帘右侧操作说明：默认收起，保持界面干净
     private bool _liveQueued;       // 已排队待应用的实时移调
     private readonly LivePlayback _livePlay = new();   // MIDI 设备实时演奏（issue #4）
@@ -57,6 +65,12 @@ public partial class MainWindow : Window
     private bool _uiReady;   // 构造期各下拉框初始化会触发 *Changed，此时不应写日志
     private string _updateUrl = "";     // 有新版本时的下载页
     private string _updateTag = "";     // 有新版本时的版本号
+
+    /// <summary>
+    /// UI-01 / UI-02：有手动改动、而且这份改动还没导出过 MIDI。
+    /// 这是界面上「未导出」标记与两个确认框共用的唯一状态源。
+    /// </summary>
+    private bool HasUnexportedEdits => _editing && !_editsExported;
 
     // —— 键位方案（控件在 KeymapWindow 里，这里只存当前方案与方案名） ——
     private KeymapProfile _keymap = KeymapProfile.Default;
@@ -93,8 +107,8 @@ public partial class MainWindow : Window
         HotkeyControlCombo.SelectedIndex = Math.Clamp(_cfg.ControlHotkeyIndex, 0, 12);
         HotkeyRewindCombo.SelectedIndex = Math.Clamp(_cfg.RewindHotkeyIndex, 0, 12);
         HotkeyForwardCombo.SelectedIndex = Math.Clamp(_cfg.ForwardHotkeyIndex, 0, 12);
-        SliderSpeed.Value = Math.Clamp(_cfg.Speed, 50, 200);
-        SliderTranspose.Value = Math.Clamp(_cfg.Transpose, -10, 10);
+        SliderSpeed.Value = Math.Clamp(_cfg.Speed, 10, 400);
+        SliderTranspose.Value = Math.Clamp(_cfg.Transpose, -24, 24);
         ChkTrimLead.IsChecked = _cfg.TrimLead;
         ChkAutoMinimize.IsChecked = _cfg.AutoMinimizeOnPlay;
         ChkChordMode.IsChecked = _cfg.ChordMode;
@@ -119,7 +133,20 @@ public partial class MainWindow : Window
         ChkMidiLive.IsChecked = false;   // 实时演奏默认关：设置里记住的设备名只用来预选
         UpdateMidiLabels();
         MidiInputService.NoteEvent += OnMidiNote;
-        MidiInputService.Error += s => UiPost(() => InsertLog("[MIDI] " + s));
+        MidiInputService.Error += s => UiPost(() =>
+        {
+            InsertLog("[MIDI] " + s);
+            // RV-08：只有「实时演奏」开着时才松键并关掉开关。
+            // 实时演奏没开时（枚举设备失败、打开设备失败）报错，ReleaseAll 会在引擎线程未跑时
+            // 直接 ReleaseEverything，把文件播放正按着的音键（含用户物理按住的键）一起抬掉。
+            // 所以这条路径只写日志。
+            if (ChkMidiLive.IsChecked != true) return;
+            // IN-08：设备断开或报错时，先把按住的键全部松开，再关掉实时演奏开关。
+            // 不松键的话，目标程序里那个音会一直按着。接口归 Engine\LivePlayback，这里只调用。
+            _livePlay.ReleaseAll();
+            ChkMidiLive.IsChecked = false;   // 走 MidiLive_Changed → StopMidiLive，顺带停掉设备监听
+            InsertLog("[MIDI] 设备异常，已松开全部按键并关闭「MIDI 设备实时演奏」。修好后点「刷新」重新接入。");
+        });
         _livePlay.Log += s => UiPost(() => InsertLog(s));
         _livePlay.NoteObserved += OnMidiObserved;
         RefreshMidiDevices();
@@ -254,6 +281,7 @@ public partial class MainWindow : Window
     private void HandleGlobalKey(int code)
     {
         if (code == 0) return;
+        // 三个热键统一走 ToggleControl / SeekRelative：热键、按钮、托盘菜单共用同一条路。
         if (code == CodeOf(HotkeyControlCombo)) { ToggleControl(); return; }
         if (code == CodeOf(HotkeyRewindCombo)) { SeekRelative(-SeekStepSeconds); return; }
         if (code == CodeOf(HotkeyForwardCombo)) SeekRelative(SeekStepSeconds);
@@ -325,7 +353,7 @@ public partial class MainWindow : Window
         {
             eng.Resume();
             LblStatus.Foreground = OkBrush;
-            LblStatus.FontSize = 22;
+            LblStatus.FontSize = ResourceFontSize("FontDisplay", 22);
             LblStatus.Text = "演奏中…";
         }
         else
@@ -343,7 +371,7 @@ public partial class MainWindow : Window
     private void SetIdleHint()
     {
         LblStatus.Foreground = NeutralBrush;
-        LblStatus.FontSize = 15;
+        LblStatus.FontSize = ResourceFontSize("FontTitle", 15);
         LblStatus.Text = "打开 MIDI 并点选主旋律 → 按 F6 或点 ▶ 播放";
     }
 
@@ -363,8 +391,19 @@ public partial class MainWindow : Window
         }
         BtnPlay.Content = "▶ 播放 (F6)";
         BtnStop.IsEnabled = _busy;   // 倒计时中允许点停止取消
-        BtnPlay.IsEnabled = !_busy && ActiveRows().Count > 0 && BuildMapping().InRangeCount > 0;
-        TxtHotHint.Text = "F6：开始 / 暂停 / 继续";
+
+        bool hasTrack = ActiveRows().Count > 0;
+        bool hasPlayable = hasTrack && BuildMapping().InRangeCount > 0;
+        BtnPlay.IsEnabled = !_busy && hasPlayable;
+
+        // 按钮灰着却不给原因，是第一次用最大的断点。这里把「为什么还不能播」写成一行提示，
+        // 并挂成按钮的悬浮提示，用户把鼠标停在灰按钮上也能看到。
+        string reason = hasTrack
+            ? (hasPlayable ? "" : "这首歌没有可弹的音：换个键位方案，或调一下「移调」")
+            : "先点「打开 MIDI 文件…」，再在左侧点一行作为主旋律";
+        TxtHotHint.Text = BtnPlay.IsEnabled ? "F6：开始 / 暂停 / 继续" : reason;
+        // ToolTip 在 Avalonia 里是附加属性，必须走 SetTip
+        Avalonia.Controls.ToolTip.SetTip(BtnPlay, BtnPlay.IsEnabled ? null : reason);
     }
 
     // ================= 日志 / 设置持久化 =================
@@ -439,8 +478,8 @@ public partial class MainWindow : Window
         if (_cfg == null) return;
         var s = _cfg.SettingsFor(profileName);
 
-        SliderSpeed.Value = Math.Clamp(s.Speed, 50, 200);        // 滑块自身的范围
-        SliderTranspose.Value = Math.Clamp(s.Transpose, -10, 10);
+        SliderSpeed.Value = Math.Clamp(s.Speed, 10, 400);        // 滑块自身的范围（与 Engine / AppConfig 同口径）
+        SliderTranspose.Value = Math.Clamp(s.Transpose, -24, 24);
         TimingCombo.SelectedIndex = Math.Clamp(s.TimingIndex, 0, 2);
 
         // 档位跟着改：播放引擎与实时演奏都要用新的时序预算
@@ -507,7 +546,7 @@ public partial class MainWindow : Window
         var notes = map.Notes.Where(n => n.InRange).ToList();
         eng.UpdateNotes(notes);
         InsertLog($"移调 {CurrentTranspose:+#;-#;0}：可演奏 {notes.Count} 音" +
-                  (map.SkipCount > 0 ? $" / 空拍 {map.SkipCount}" : ""));
+                  (map.SkipCount > 0 ? $" / 跳过 {map.SkipCount}" : ""));
         RefreshPreview();
     }
 
@@ -600,15 +639,17 @@ public partial class MainWindow : Window
         if (!_previewOn && _engine is not { IsRunning: true }) _previewSeconds = t;
     }
 
-    /// <summary>显示某个时刻的音：音名 + 简谱 + 要按的键。不传则取当前指针位置。</summary>
+    /// <summary>显示某个时刻的音：简谱 + 要按的键。不传则取当前指针位置。</summary>
     private void UpdateSeekNote(double? atSeconds = null)
     {
         if (TxtSeekNote == null) return;
         double t = atSeconds ?? (_engine is { IsRunning: true } ? _engine.ElapsedSeconds : _previewSeconds);
         MappedNote? note = _previewNotes.LastOrDefault(n => n.Start <= t && t < n.End);
         if (note == null) { TxtSeekNote.Text = "—"; return; }
-        string name = Music.NoteName(note.Pitch);
-        if (!note.InRange) { TxtSeekNote.Text = $"{name} 超音域"; return; }
+        string name = Music.SolfegeName(note.Pitch);
+        // InRange 同时覆盖两种情况：超出键位音域，或音域内没有对应的键（缺半音时按跳过处理）。
+        // 用户看到的说法要能区分「没键可弹」，不要再统一写成「超音域」。
+        if (!note.InRange) { TxtSeekNote.Text = $"{name} 没有对应键"; return; }
         // 按键与修饰键一律按当前键位方案算，和实际演奏一致
         _keymap.TryKeyOfPitch(note.Pitch, out string key, out int octaveOffset, out bool sharp);
         var parts = new List<string>();
@@ -616,13 +657,80 @@ public partial class MainWindow : Window
         else if (octaveOffset > 0) parts.Add("升八度键+");
         if (sharp) parts.Add("升半音键+");
         parts.Add(string.IsNullOrEmpty(key) ? "（无按键）" : DisplayKey(key));
-        TxtSeekNote.Text = $"{name} {Music.DegreeName(note.Pitch)} · {string.Join("", parts)}";
+        TxtSeekNote.Text = $"{name} · {string.Join("", parts)}";
     }
 
     /// <summary>按键名显示：逗号写成全角逗号，其余原样。</summary>
     private static string DisplayKey(string key) => key == "," ? "，" : key;
 
     // ================= 卷帘编辑 =================
+
+    /// <summary>UI-01 / UI-02：常驻的「有未导出改动」提示条。只在真的还没导出时显示。</summary>
+    private void UpdateEditMark()
+    {
+        if (TxtEditMark != null) TxtEditMark.IsVisible = HasUnexportedEdits;
+    }
+
+    /// <summary>
+    /// UI-01 / OL-02：载入新曲、退出程序这类会丢改动的动作，先问一次。
+    /// 没有未导出的改动就直接放行（不弹框）。返回 true = 可以继续。
+    /// </summary>
+    private async Task<bool> ConfirmDiscardEditsAsync(string what)
+    {
+        if (!HasUnexportedEdits) return true;
+
+        var ok = new Button { Content = "丢弃改动并继续", Classes = { "accent" }, Padding = new Thickness(16, 4) };
+        var cancel = new Button { Content = "取消", Classes = { "secondary" }, Padding = new Thickness(16, 4) };
+        var dlg = new Window
+        {
+            Title = "有未导出的手动改动",
+            Width = 400,
+            SizeToContent = SizeToContent.Height,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Background = this.Background,
+            FontFamily = this.FontFamily,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(16),
+                Spacing = 14,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = $"{what}会丢弃当前 {_editor.Notes.Count} 个手动改动，撤销栈也会一起清空，丢弃后无法恢复。\n"
+                             + "想留住这份改动，先点「取消」，再点「导出 MIDI…」存一份。",
+                        TextWrapping = TextWrapping.Wrap,
+                        LineHeight = 20,
+                    },
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        Spacing = 8,
+                        HorizontalAlignment = HorizontalAlignment.Right,
+                        Children = { cancel, ok },
+                    },
+                },
+            },
+        };
+        ok.Click += (_, _) => dlg.Close(true);
+        cancel.Click += (_, _) => dlg.Close(false);
+        return await dlg.ShowDialog<bool>(this);
+    }
+
+    /// <summary>
+    /// RV-09：换主旋律轨 / 改和弦开关 / 改合奏勾选也会重建谱面并清空撤销栈，
+    /// 所以先走同一个确认框。没有未导出改动就直接放行（不弹框）。
+    /// 已经有确认框在显示时不重复弹，按「保持原状」处理（返回 false）。
+    /// </summary>
+    private async Task<bool> ConfirmDiscardEditsForActionAsync(string what)
+    {
+        if (!HasUnexportedEdits) return true;
+        if (_discardPrompting) return false;
+        _discardPrompting = true;
+        try { return await ConfirmDiscardEditsAsync(what); }
+        finally { _discardPrompting = false; }
+    }
 
     /// <summary>谱面来源要变了：有手动改动就先丢弃并说明，否则用户会以为点了没反应。</summary>
     private void DropEditsIfAny(string why)
@@ -638,6 +746,8 @@ public partial class MainWindow : Window
         if (_editing) return;
         _editor.Reset(ComputeAutoNotes());
         _editing = true;
+        _editsExported = false;
+        UpdateEditMark();
         InsertLog("已进入编辑模式：自动提取的选项不再影响谱面，点「还原为自动」可退出。");
     }
 
@@ -645,8 +755,10 @@ public partial class MainWindow : Window
     private void ResetEdits()
     {
         _editing = false;
+        _editsExported = false;
         _editor.Clear();
         Roll.ClearSelection();
+        UpdateEditMark();
     }
 
     /// <summary>
@@ -657,6 +769,7 @@ public partial class MainWindow : Window
     private void OnRollEditCommitted(IReadOnlyList<RawNote> notes, string what)
     {
         BeginEditIfNeeded();
+        _editsExported = false;   // 又改了谱面：已导出标记作废
         _editor.ReplaceAll(notes);
         RefreshPreview(pushToRoll: false);
         InsertLog($"已{what}。");
@@ -683,6 +796,7 @@ public partial class MainWindow : Window
     private void DoUndo()
     {
         if (!_editing || !_editor.Undo()) { InsertLog("没有可撤销的操作。"); return; }
+        _editsExported = false;   // 谱面又变了：已导出标记作废
         RefreshPreview(keepView: true);
         Roll.ClearSelection();
         InsertLog("已撤销。");
@@ -691,6 +805,7 @@ public partial class MainWindow : Window
     private void DoRedo()
     {
         if (!_editing || !_editor.Redo()) { InsertLog("没有可重做的操作。"); return; }
+        _editsExported = false;   // 谱面又变了：已导出标记作废
         RefreshPreview(keepView: true);
         Roll.ClearSelection();
         InsertLog("已重做。");
@@ -711,6 +826,7 @@ public partial class MainWindow : Window
         BtnDeleteNote.IsEnabled = Roll.HasSelection;
         BtnResetEdits.IsEnabled = _editing;
         BtnExportMidi.IsEnabled = _noteCount > 0;
+        UpdateEditMark();   // UI-01：常驻提示跟着编辑状态走
     }
 
     private void Undo_Click(object? sender, RoutedEventArgs e) => DoUndo();
@@ -733,8 +849,10 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 说明栏占 188px。窗口太窄时，右栏减去它就不够放卷帘工具栏，缩放按钮会被挤掉 ——
+    /// 说明栏占 248px（UI-12 从 188 加宽，右列文字不再被裁）。
+    /// 窗口太窄时，右栏减去它就不够放卷帘工具栏，缩放按钮会被挤掉 ——
     /// 所以按窗口宽度自动收起，拉宽后自动恢复。
+    /// 门槛仍取 1080：默认窗口宽 1120，抬高门槛会让默认尺寸下根本打不开说明栏。
     /// </summary>
     private void UpdateHelpVisibility()
     {
@@ -951,6 +1069,8 @@ public partial class MainWindow : Window
             if (string.IsNullOrEmpty(path)) return;
 
             MidiExporter.Write(path, raw, "MidiKeyPlayer 编辑");
+            _editsExported = true;   // UI-01：已存盘，常驻提示可以收起
+            UpdateEditMark();
             InsertLog($"已导出 MIDI：{raw.Count} 个音 → {System.IO.Path.GetFileName(path)}");
         }
         catch (Exception ex)
@@ -1003,6 +1123,9 @@ public partial class MainWindow : Window
             var path = files[0].TryGetLocalPath();
             if (string.IsNullOrEmpty(path)) return;
 
+            // UI-01：换歌会清空手动改动与撤销栈，所以先确认，别静默丢掉
+            if (!await ConfirmDiscardEditsAsync("打开新 MIDI 文件")) return;
+
             LoadMidiFile(path);
         }
         catch (Exception ex)
@@ -1037,7 +1160,9 @@ public partial class MainWindow : Window
             _selected = null;
             _previewSeconds = 0;      // 换歌必须回到 0，否则上一首的位置会夹到新曲末尾 → 一播放就结束
             Roll.FitAll();
-            ResetEdits();
+            // UI-01 / OL-02：唯一的丢弃点。两条换歌路径（打开文件、开发快照）都经过这里，
+            // 所以保护与日志都放在 LoadMidiFile 内部，不再直接调 ResetEdits()。
+            DropEditsIfAny("打开了新文件");
             ChooseRecommendedTrack();
             RefreshPreview();
             return true;
@@ -1060,6 +1185,16 @@ public partial class MainWindow : Window
     /// <summary>换歌前停掉旧曲（松开按键、释放引擎）。</summary>
     private void StopPlaybackForNewFile()
     {
+        // 还在倒计时（引擎尚未启动，_engine 为 null，_busy 为 true）：
+        // 必须停掉计时器，否则到点后 StartPlayback 打的是上一首的 _playNotes（OL-03）。
+        if (_countdownTimer != null)
+        {
+            _countdownTimer.Stop();
+            _countdownTimer = null;
+            ResetUi();   // 走现有停止路径：恢复 _busy、按钮与倒计时配色
+            InsertLog("已取消倒计时（换歌）。");
+            return;
+        }
         if (_engine is { IsRunning: true })
         {
             StopPlaybackNow();
@@ -1165,14 +1300,23 @@ public partial class MainWindow : Window
         return s;
     }
 
-    private void TrackList_SelectionChanged(object? sender, SelectionChangedEventArgs e)
+    private async void TrackList_SelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
-        if (TrackList.SelectedItem is TrackRowVM row) SetMain(row);
+        if (_revertingTrack) return;   // RV-09：取消后回退选中行，忽略自触发的事件
+        if (TrackList.SelectedItem is TrackRowVM row) await SetMain(row);
     }
 
-    private void SetMain(TrackRowVM? row)
+    private async Task SetMain(TrackRowVM? row)
     {
         if (row == null) return;
+        // RV-09：换主旋律轨会重建谱面并丢弃手动改动，先确认一次；取消则保持原状。
+        if (!await ConfirmDiscardEditsForActionAsync("换主旋律轨"))
+        {
+            _revertingTrack = true;
+            try { TrackList.SelectedItem = _selected; }
+            finally { _revertingTrack = false; }
+            return;
+        }
         DropEditsIfAny("换了主旋律轨");
         foreach (var r in _tracks) r.IsMain = ReferenceEquals(r, row);
         _selected = row;
@@ -1231,26 +1375,17 @@ public partial class MainWindow : Window
         {
             row.VoiceIndex = VoiceIndexOf(row);
             IBrush brush;
-            double opacity = 1.0;
             if (row.IsVoiceActive)
             {
                 brush = ResourceBrush("BrushVoice" + Music.Mod(row.VoiceIndex, PianoRoll.VoiceCount));
             }
-            else if (row.IsPercussion)
-            {
-                // 未参与演奏的打击乐轨：灰、但不那么淡，提示这是鼓轨
-                brush = ResourceBrush("BrushTextMuted");
-                opacity = 0.55;
-            }
             else
             {
-                // 未参与合奏：不用调色板颜色（VoiceIndex 可能是 -1，取模会绕到 11 号色），
-                // 统一用弱化灰，和打击乐轨区分在文字色深浅上。
+                // 未参与演奏（含打击乐轨）：不用调色板颜色（VoiceIndex 可能是 -1，取模会绕到 11 号色），
+                // 统一用弱化灰。UI-08：不再叠加 0.45 / 0.55 不透明度 —— 叠完合成色约 1.6:1，
+                // 远低于 WCAG AA 正文 4.5:1，弱化色本身已经提到 #6B7480 够区分了。
                 brush = ResourceBrush("BrushTextMuted");
-                opacity = 0.45;
             }
-            if (brush is SolidColorBrush scb)
-                brush = new SolidColorBrush(scb.Color, opacity);
             row.VoiceBrush = brush;
         }
     }
@@ -1261,6 +1396,17 @@ public partial class MainWindow : Window
         if (Application.Current?.TryFindResource(key, out var found) == true && found is IBrush b)
             return b;
         return NeutralBrush;
+    }
+
+    /// <summary>
+    /// 按资源名取字号（Theme.axaml 的字号刻度，唯一真源）。取不到才用 fallback。
+    /// 状态区的三档字号都从这里取，代码里不再写死 22 / 38。
+    /// </summary>
+    private static double ResourceFontSize(string key, double fallback)
+    {
+        if (Application.Current?.TryFindResource(key, out var found) == true && found is double d)
+            return d;
+        return fallback;
     }
 
     /// <summary>
@@ -1340,9 +1486,19 @@ public partial class MainWindow : Window
     }
 
     /// <summary>和弦开关变化：写回设置，再刷新谱面与卷帘。</summary>
-    private void ChordMode_Changed(object? sender, RoutedEventArgs e)
+    private async void ChordMode_Changed(object? sender, RoutedEventArgs e)
     {
-        _chordOn = ChkChordMode.IsChecked == true;
+        if (_revertingChord) return;   // RV-09：取消后回退勾选，忽略自触发的事件
+        bool on = ChkChordMode.IsChecked == true;
+        // RV-09：切换和弦会重建谱面并丢弃手动改动，先确认一次；取消则把勾选退回原值。
+        if (!await ConfirmDiscardEditsForActionAsync("改和弦开关"))
+        {
+            _revertingChord = true;
+            try { ChkChordMode.IsChecked = _chordOn; }
+            finally { _revertingChord = false; }
+            return;
+        }
+        _chordOn = on;
         _cfg.ChordMode = _chordOn;
         ScheduleSave();
         if (_busy || _previewDeb is null) return;
@@ -1445,19 +1601,98 @@ public partial class MainWindow : Window
         SliderTranspose.Value = best;   // 触发滑块事件：保存设置并刷新预览
         string sign = best > 0 ? "+" : "";
         if (bestSkip == 0)
-            InsertLog($"一键移调：整体 {sign}{best} 半音后全部音在音域内。");
+            InsertLog($"一键移调：整体 {sign}{best} 半音后全部音都有对应的键。");
         else
-            InsertLog($"一键移调：整体 {sign}{best} 半音后仍剩 {bestSkip} 个音超音域（跨度过大，仍会空拍）");
+            InsertLog($"一键移调：整体 {sign}{best} 半音后仍有 {bestSkip} 个音没有对应的键（跨度太大，会被跳过）");
         RefreshPreview();
     }
 
+    /// <summary>
+    /// 「自然音最多」：给只有自然音的乐器（口琴、某些游戏乐器）找最省半音键的移调。
+    /// 与「一键移调」并存：那个只最小化超音域的漏音，这个优先让发声落在自然音上。
+    /// 排序：自然音最多 → 超音域最少 → |移调| 最小。
+    /// </summary>
+    private void BtnNaturalTranspose_Click(object? sender, RoutedEventArgs e)
+    {
+        if (_busy) return;
+
+        // 谱面只算一次：MapAt 每次都会重建（GetActiveRawNotes 会跑一遍合并与提取）
+        var raw = GetActiveRawNotes();
+        if (raw.Count == 0) return;
+
+        // 自然音判据的基准音：当前键位方案的 BaseNote（默认 60 = C4）
+        int baseNote = KeymapProfile.Current.BaseNote;
+        int lo = -AppConfig.MaxTransposeSemitones;
+        int hi = AppConfig.MaxTransposeSemitones;
+
+        int bestT = 0, bestNatural = -1, bestAccidental = 0, bestSkip = int.MaxValue;
+        int total = -1;   // 基准音高集合的音符数，用真实映射结果填（含被合并/丢弃的音）
+
+        for (int t = lo; t <= hi; t++)
+        {
+            var map = NoteMapper.Map(raw, t, manualBaseOctave: null);
+            total = map.Notes.Count;   // 所有候选都映射同一份音符，每轮相等
+
+            int natural = 0, accidental = 0, skip = 0;
+            foreach (var n in map.Notes)
+            {
+                if (!n.InRange) { skip++; continue; }
+                if (IsNaturalPitch(n.SoundingPitch - baseNote)) natural++;
+                else accidental++;
+            }
+
+            bool win = natural > bestNatural
+                       || (natural == bestNatural && skip < bestSkip)
+                       || (natural == bestNatural && skip == bestSkip && Math.Abs(t) < Math.Abs(bestT));
+            if (win)
+            {
+                bestNatural = natural;
+                bestAccidental = accidental;
+                bestSkip = skip;
+                bestT = t;
+            }
+        }
+
+        if (bestNatural < 0) return;
+
+        int playable = bestNatural + bestAccidental;
+        if (playable == 0)
+        {
+            InsertLog("自然音移调：当前谱面没有一个音在能弹范围内，无法比较。请先调「移调」或换一行。");
+            return;
+        }
+
+        SliderTranspose.Value = bestT;   // 触发滑块事件：保存设置并刷新预览
+        string sign = bestT > 0 ? "+" : "";
+        InsertLog($"自然音移调：{sign}{bestT} 半音后 {bestNatural} / {playable} 个音落在自然键上，"
+                  + $"{bestAccidental} 个需要半音键，{bestSkip} 个没有对应的键。");
+        if (bestAccidental > 0)
+            InsertLog("　其中需要半音键的音，换个带升音的方案才能弹（例如「36 键半音三排」）。");
+        if (total > playable)
+            InsertLog($"　另有 {total - playable} 个音在移调后超出 MIDI 音域（0 ~ 127）。");
+        RefreshPreview();
+    }
+
+    /// <summary>自然音（白键）判据：相对基准音的半音数落在 {0,2,4,5,7,9,11}。</summary>
+    private static bool IsNaturalPitch(int semitoneFromBase) => (semitoneFromBase % 12 + 12) % 12
+        is 0 or 2 or 4 or 5 or 7 or 9 or 11;
+
     /// <summary>勾选“合”：勾选先后即主次（先勾=1 主）；勾完立即刷新，可直接播放。</summary>
-    private void Mix_Changed(object? sender, RoutedEventArgs e)
+    private async void Mix_Changed(object? sender, RoutedEventArgs e)
     {
         if (sender is CheckBox cb && cb.DataContext is TrackRowVM row)
         {
-            DropEditsIfAny("改了合奏声部");
+            if (_revertingMix) return;   // RV-09：取消后回退勾选，忽略自触发的事件
             bool on = cb.IsChecked == true;
+            // RV-09：改合奏勾选会重建谱面并丢弃手动改动，先确认一次；取消则把勾选退回原值。
+            if (!await ConfirmDiscardEditsForActionAsync("改合奏声部"))
+            {
+                _revertingMix = true;
+                try { cb.IsChecked = !on; }   // 双向绑定同时把 IsMix 退回
+                finally { _revertingMix = false; }
+                return;
+            }
+            DropEditsIfAny("改了合奏声部");
             row.IsMix = on;   // 保证模型状态一致
             if (on)
             {
@@ -1575,7 +1810,8 @@ public partial class MainWindow : Window
             _ => FailBrush
         };
         label.Foreground = mark.Foreground;
-        label.Text = $"{c.Name}：{c.Detail}";
+        // 行内只留短名，细节统一放在下面那行 TxtCheckHint 里 —— 否则同一句话会出现两次
+        label.Text = c.Name;
     }
 
     // ================= 自动检查更新 =================
@@ -1677,6 +1913,12 @@ public partial class MainWindow : Window
             _keymap = saved;
             KeymapProfile.Current = saved;
             if (_cfg != null) _cfg.KeymapName = saved.Name;
+            SyncKeymapUi();   // 新方案立刻上身：方案名、卷帘颜色、音域提示、状态行都跟着走，不必等关窗
+        }
+        else
+        {
+            // 只带消息的调用（键位窗口的 Say）不带方案：这里用真源校正本地字段，别留陈旧值
+            _keymap = KeymapProfile.Current ?? _keymap;
         }
         if (!string.IsNullOrEmpty(message)) InsertLog(message);
     }
@@ -1692,11 +1934,15 @@ public partial class MainWindow : Window
     /// <summary>把当前方案同步到主界面：方案名小字、实时演奏、卷帘颜色与谱面。</summary>
     private void SyncKeymapUi()
     {
+        // 先用真源校正本地字段：键位窗口换方案时已经写进 KeymapProfile.Current，
+        // 原来直接拿本地 _keymap 写回，等于把刚换的新方案顶掉（换方案后音域提示就停在旧方案上）。
+        _keymap = KeymapProfile.Current ?? _keymap;
         if (TxtKeymapName != null) TxtKeymapName.Text = _keymap.Name;
         KeymapProfile.Current = _keymap;
         if (TxtSeekNote != null) UpdateSeekNote();
         RefreshPreview();
     }
+
     // ================= MIDI 设备接入（issue #4） =================
 
     /// <summary>重新扫描设备并尽量保持当前选择。热插拔后点「刷新」走这里。</summary>
@@ -1767,7 +2013,7 @@ public partial class MainWindow : Window
     private void UpdateMidiLabels()
     {
         if (TxtMidiOctave != null)
-            TxtMidiOctave.Text = Music.NoteName((_livePlay.BaseOctave + 1) * 12);
+            TxtMidiOctave.Text = Music.SolfegeName((_livePlay.BaseOctave + 1) * 12);
         if (TxtMidiVelocity != null)
             TxtMidiVelocity.Text = _livePlay.MinVelocity <= 1 ? "1" : _livePlay.MinVelocity.ToString();
     }
@@ -1833,9 +2079,9 @@ public partial class MainWindow : Window
                 _midiStarting = false;
                 if (ok)
                 {
+                    var range = LivePlayback.PlayableRange(_livePlay.BaseOctave);
                     InsertLog($"[MIDI] 已接入设备「{name}」。按键会直接发送到目标程序，音符范围 "
-                              + $"{Music.NoteName(LivePlayback.PlayableRange(_livePlay.BaseOctave).Lo)} ~ "
-                              + $"{Music.NoteName(LivePlayback.PlayableRange(_livePlay.BaseOctave).Hi)}。");
+                              + $"{Music.SolfegeRange(range.Lo, range.Hi)}。");
                 }
                 else
                 {
@@ -1857,7 +2103,7 @@ public partial class MainWindow : Window
         UpdateMidiPanels();
         if (!wasListening) return;
         InsertLog($"[MIDI] 实时演奏已停止（本次收到 {_livePlay.NoteOnCount} 个音，"
-                  + $"超音域 {_livePlay.OutOfRangeCount}，顶音 {_livePlay.StolenCount}，"
+                  + $"没键可弹 {_livePlay.OutOfRangeCount}，顶音 {_livePlay.StolenCount}，"
                   + $"太短补足 {_livePlay.TooShortCount}）。");
     }
 
@@ -1873,8 +2119,8 @@ public partial class MainWindow : Window
     {
         if (ChkMidiLive.IsChecked != true) return;
         string text = map.Playable
-            ? $"[MIDI] {Music.NoteName(pitch)} → {KeyLabelOf(map)}"
-            : $"[MIDI] {Music.NoteName(pitch)} → 超出音域";
+            ? $"[MIDI] {Music.SolfegeName(pitch)} → {KeyLabelOf(map)}"
+            : $"[MIDI] {Music.SolfegeName(pitch)} → 超出音域";
         UiPost(() => UpdateMidiStatus(text));
     }
 
@@ -1902,6 +2148,7 @@ public partial class MainWindow : Window
     {
         bool hasRows = ActiveRows().Count > 0;
         BtnAutoTranspose.IsEnabled = hasRows;
+        BtnNaturalTranspose.IsEnabled = hasRows;
         BtnExport.IsEnabled = hasRows;
     }
 
@@ -2003,17 +2250,17 @@ public partial class MainWindow : Window
         {
             LblWarn.Text = m.Notes.Count == 0
                 ? "该轨道/声道没有音符，请换一行。"
-                : "所有音都超出音域（低音do~高高音#do），请把“移调”调到 0 附近再试。";
+                : "这些音在键位上都没有对应的键。请换个方案，或把「移调」调到 0 附近再试。";
             LblWarn.Foreground = warnColor;
         }
         else if (m.SkipCount > 0)
         {
-            LblWarn.Text = $"有 {m.SkipCount} 个音超出音域（低音do~高高音#do），将自动空拍（可用“移调”调整）。";
+            LblWarn.Text = $"有 {m.SkipCount} 个音没有对应的键，会跳过不弹（可用「移调」或换方案调整）。";
             LblWarn.Foreground = warnColor;
         }
         else
         {
-            LblWarn.Text = "全部音都在可演奏音域内，可直接演奏。";
+            LblWarn.Text = "全部音都有对应的键，可直接演奏。";
             LblWarn.Foreground = okColor;
         }
         UpdateTransportUi();
@@ -2087,16 +2334,18 @@ public partial class MainWindow : Window
     private void UpdateCountdownText()
     {
         LblStatus.Foreground = FailBrush;
-        LblStatus.FontSize = 38;   // 切目标程序前的最后几秒必须一眼看到
+        LblStatus.FontSize = ResourceFontSize("FontCountdown", 38);   // 切目标程序前的最后几秒必须一眼看到
         LblStatus.Text = $"{_countdownLeft} 秒后开始 —— 请切到目标程序并装备乐器（F6 可取消）";
         SetCountdownChrome(true);
     }
 
-    /// <summary>倒计时期间窗口底色轻微变暖做提醒，结束时恢复原色。</summary>
+    /// <summary>倒计时期间窗口底色轻微变暖做提醒，结束时恢复原色。
+    /// 两种底色都在 Theme.axaml 里（唯一真源），这里不写裸色值。</summary>
     private void SetCountdownChrome(bool on)
     {
-        Background = new Avalonia.Media.SolidColorBrush(
-            Avalonia.Media.Color.Parse(on ? "#FFF3E4D8" : "#F4F6F9"));   // 暖色提醒 / 常态底色（= BrushCanvas）
+        string key = on ? "BrushCountdownChrome" : "BrushCanvas";
+        if (Application.Current?.TryFindResource(key, out var found) == true && found is IBrush b)
+            Background = b;
     }
 
     private void StartPlayback()
@@ -2121,7 +2370,20 @@ public partial class MainWindow : Window
         // 播放前可能已把进度条或卷帘拖到某个位置，从那里开始
         double startFrac = SliderProgress.Maximum > 0
             ? Math.Clamp(SliderProgress.Value / SliderProgress.Maximum, 0, 1) : 0;
-        _gameHwnd = IntPtr.Zero;   // 新一轮播放重新记忆目标窗口
+
+        // A03：目标窗口只在开始演奏这一下记一次。
+        // 倒计时已经把时间留给用户切窗口，此刻的前台窗口就是目标程序；
+        // 之后不再轮询 —— 否则用户中途 Alt+Tab 出去，停止时会把焦点抢到那个无关窗口。
+        _gameHwnd = IntPtr.Zero;
+        IntPtr fgAtStart = Input.InputSender.ForegroundWindow;
+        if (fgAtStart != IntPtr.Zero && fgAtStart != SelfHwnd) _gameHwnd = fgAtStart;
+
+        // A06：演奏路径与试听路径共用同一条卷帘时间轴。引擎的 ElapsedSeconds 是**音乐时间**
+        // （Worker 按「物理流逝 × 速度」积分而来，PlaybackEngine:87/:431），自带速度换算，
+        // 所以这里必须把播放头比例复位成 1；不复位就会沿用它上次试听留下的比例。
+        // （播放头跟随开关 Roll.IsPlaying 由 UpdateTransportUi 统一设置，这里不重复。）
+        if (Roll != null) Roll.SetPlayheadScale(1.0);
+
         engine.Timing = InputTiming.FromIndex(TimingCombo.SelectedIndex);
         engine.Play(_playNotes, speed, FixedLeadMs, loop);
         SliderProgress.Maximum = Math.Max(0.1, engine.TotalSeconds);
@@ -2137,7 +2399,7 @@ public partial class MainWindow : Window
         string fgTitle = InputSender.ForegroundWindowTitle;
         InsertLog($"开始演奏；前台窗口：{(string.IsNullOrEmpty(fgTitle) ? "（读不到，可能未切到目标程序）" : fgTitle)}");
         LblStatus.Foreground = OkBrush;
-        LblStatus.FontSize = 22;
+        LblStatus.FontSize = ResourceFontSize("FontDisplay", 22);
         SetCountdownChrome(false);
         LblStatus.Text = "演奏中…";
 
@@ -2163,9 +2425,8 @@ public partial class MainWindow : Window
             var eng = _engine;
             if (eng == null || !eng.IsRunning) return;
 
-            // 记住“不是本程序”的前台窗口（目标程序），供停止时归还焦点用
-            IntPtr fg = Input.InputSender.ForegroundWindow;
-            if (fg != IntPtr.Zero && fg != SelfHwnd) _gameHwnd = fg;
+            // A03：这里原先把“任何非本程序的前台窗口”每 80ms 记进 _gameHwnd，
+            // 用户 Alt+Tab 出去后目标窗口就被覆盖掉了。目标窗口改为在 StartPlayback 开头记一次。
 
             if (!_seeking)   // 拖动进度条或卷帘时不要覆盖用户位置
             {
@@ -2173,7 +2434,7 @@ public partial class MainWindow : Window
                 TxtTime.Text = eng.LoopCount > 0
                     ? $"{eng.ElapsedSeconds:F1} / {eng.TotalSeconds:F1} s（第 {eng.LoopCount + 1} 遍）"
                     : $"{eng.ElapsedSeconds:F1} / {eng.TotalSeconds:F1} s";
-                Roll.SetPosition(eng.ElapsedSeconds);
+                Roll?.SetPosition(eng.ElapsedSeconds);   // 实参是音乐时间，与进度条、卷帘同一时间轴（A06）
                 UpdateSeekNote();
             }
             if (!string.IsNullOrEmpty(eng.CurrentNote))
@@ -2213,8 +2474,10 @@ public partial class MainWindow : Window
 
         _uiTimer?.Stop();
         _uiTimer = null;
-        if (eng != null) InsertLog(eng.Probe.Summary());
+        // C05：消息条只留最新一条，所以先写“已停止”，再写诊断。
+        // 反过来（诊断在前）用户只会看到“已停止。”，诊断被覆盖掉。
         InsertLog("已停止。");
+        if (eng != null) InsertLog(eng.Probe.Summary());
         ForceReleaseKeysForGame();
         ResetUi();
     }
@@ -2236,9 +2499,11 @@ public partial class MainWindow : Window
         _previewSeconds = frac * PreviewTotalSeconds;
         RefreshPreview();
         Roll.SetPosition(_previewSeconds);
-        LblStatus.FontSize = 22;
+        LblStatus.FontSize = ResourceFontSize("FontDisplay", 22);
         SetCountdownChrome(false);
         SetIdleHint();
+        // A03：回到空闲就把记住的目标窗口丢掉，避免下一次停止把焦点还给一个早就关掉的窗口。
+        _gameHwnd = IntPtr.Zero;
     }
 
     private void SetBusy(bool busy)
@@ -2350,11 +2615,48 @@ public partial class MainWindow : Window
         Close();
     }
 
+    /// <summary>UI-02：关窗确认。用户确认丢弃改动才真的退出。</summary>
+    private async Task ConfirmExitWithEditsAsync()
+    {
+        if (_exitConfirming) return;
+        _exitConfirming = true;
+        try
+        {
+            if (!await ConfirmDiscardEditsAsync("退出程序")) return;
+            _quitNow = true;   // 已经确认过，第二次关窗不再询问
+            Close();
+        }
+        finally
+        {
+            _exitConfirming = false;
+        }
+    }
+
     private void OnClosing(object? sender, WindowClosingEventArgs e)
     {
+        // UI-02：有未导出的手动改动时先确认，别让点 × 静默丢掉改动。
+        // 托盘「退出」是用户明确的放弃动作（QuitApp 已经置好 _quitNow），不再询问。
+        if (HasUnexportedEdits && !_quitNow && !_exitConfirming)
+        {
+            e.Cancel = true;
+            _ = ConfirmExitWithEditsAsync();
+            return;
+        }
+
         SaveSettings();
 
-        // 点 × = 彻底退出（托盘图标一并移除）
+        // 点 × = 彻底退出（托盘图标一并移除）。清理步骤与开发快照的退出走同一段代码。
+        DevCleanUpForExit();
+    }
+
+    /// <summary>
+    /// 退出前的统一清理：停止计时器与播放、停试听与 MIDI 实时演奏、停全局热键与 MIDI 输入、
+    /// 释放按键、移除托盘图标。A19：正常关窗与开发快照的 Environment.Exit 共用这一处，
+    /// 免得再有哪条退出路径跳过清理（原来 5 处 Environment.Exit(0) 全部绕过）。
+    /// 只允许在 UI 线程调用。
+    /// </summary>
+    internal void DevCleanUpForExit()
+    {
         _countdownTimer?.Stop();
         _liveTimer?.Stop();
         _uiTimer?.Stop();
@@ -2379,7 +2681,7 @@ public partial class MainWindow : Window
         ForceReleaseKeysForGame();
     }
 
-    /// <summary>彻底松开按键/鼠标键：停止时焦点在本窗口，先把焦点还给记住的目标窗口再补发一次。</summary>
+    /// <summary>彻底松开按键/鼠标键：把焦点还给记住的目标窗口，再补发一次。</summary>
     private void ForceReleaseKeysForGame()
     {
         try
@@ -2388,8 +2690,9 @@ public partial class MainWindow : Window
             IntPtr game = _gameHwnd;
             if (game != IntPtr.Zero && game != SelfHwnd)
             {
+                // A03：这里原先还有一次 Thread.Sleep(60) 卡住 UI 线程，等焦点切过去再补发。
+                // 已去掉：切焦点本来就要几帧，等待交给已有的失焦守卫逻辑，界面不该停 60ms。
                 Input.InputSender.BringToForeground(game);
-                Thread.Sleep(60);
                 Input.InputSender.ReleaseEverything();
             }
         }

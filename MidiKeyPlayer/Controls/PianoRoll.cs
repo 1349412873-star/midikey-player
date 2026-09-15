@@ -85,7 +85,11 @@ public sealed class PianoRoll : Control
     private int _anchorPitch;
     /// <summary>拖动中已经试听过的音高，防止同一音高反复发声。</summary>
     private int _lastAuditioned = int.MinValue;
-    private readonly HashSet<int> _eraseDone = new();
+    /// <summary>
+    /// 本次右键连擦已经擦掉的音符。必须记音符对象而不是下标：删掉一个音之后，
+    /// 后继音符会平移进同一个下标槽位，按下标去重会把它们误判成"已擦"而跳过（UI-05）。
+    /// </summary>
+    private readonly HashSet<RawNote> _eraseDone = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<int> _pitchSelDone = new();
 
     private static readonly IBrush Bg = new SolidColorBrush(Color.Parse("#F7F9FC"));
@@ -175,6 +179,29 @@ public sealed class PianoRoll : Control
     private static readonly Typeface Face = Typeface.Default;
     private static readonly int[] BlackPc = { 1, 3, 6, 8, 10 };
 
+    // 光标在每次指针移动时都要赋值，按类型缓存成静态实例，避免高频新建（UI-19）
+    private static readonly Cursor HandCursor = new(StandardCursorType.Hand);
+    private static readonly Cursor SizeWECursor = new(StandardCursorType.SizeWestEast);
+    private static readonly Cursor SizeAllCursor = new(StandardCursorType.SizeAll);
+
+    /// <summary>
+    /// 文字对象缓存。标尺每小节一个、琴键栏每个 C 一个、读数每帧一个，FormattedText
+    /// 的构造（含字形排布）不便宜，键（文本 + 字号 + 画刷）相同就直接复用。
+    /// 文本随缩放连续变化，所以设一个上限，超过就整表清掉（UI-19）。
+    /// </summary>
+    private static readonly Dictionary<(string Text, double Size, IBrush Brush), FormattedText> TextCache = new();
+
+    private static FormattedText TextOf(string text, double size, IBrush brush)
+    {
+        var key = (text, size, brush);
+        if (TextCache.TryGetValue(key, out var ft)) return ft;
+        if (TextCache.Count > 512) TextCache.Clear();
+        ft = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+                               Face, size, brush);
+        TextCache[key] = ft;
+        return ft;
+    }
+
     /// <summary>拖动中持续触发：只挪指针，不打断播放。</summary>
     public event Action<double>? SeekPreview;
     /// <summary>松手：真正跳转。</summary>
@@ -208,7 +235,7 @@ public sealed class PianoRoll : Control
 
     public PianoRoll()
     {
-        Cursor = new Cursor(StandardCursorType.Hand);
+        Cursor = HandCursor;
         ClipToBounds = true;
         Focusable = true;
     }
@@ -460,7 +487,10 @@ public sealed class PianoRoll : Control
     private double RowH((int Lo, int Hi) r) => PlotH / Math.Max(1, r.Hi - r.Lo + 1);
 
     private double YCenterOf(int pitch, (int Lo, int Hi) r) =>
-        RulerH + (r.Hi - pitch + 0.5) * RowH(r);
+        YCenterOf(pitch, r, RowH(r));
+
+    private double YCenterOf(int pitch, (int Lo, int Hi) r, double rowH) =>
+        RulerH + (r.Hi - pitch + 0.5) * rowH;
 
     private int PitchAt(double y, (int Lo, int Hi) r)
     {
@@ -472,10 +502,18 @@ public sealed class PianoRoll : Control
     private Rect RectOf(int pitch, double start, double end)
     {
         var r = PitchRange();
-        double rowH = RowH(r);
+        return RectOf(pitch, start, end, r, RowH(r));
+    }
+
+    /// <summary>
+    /// 命中 / 框选 / 描边等逐音符循环里用的版本：音域与行高由调用方在循环外算一次。
+    /// 不传缓存值时每次调用都要重扫全表求音域，循环里就是 O(N²)。
+    /// </summary>
+    private Rect RectOf(int pitch, double start, double end, (int Lo, int Hi) r, double rowH)
+    {
         double barH = Math.Max(3, rowH * 0.72);
         double x0 = XOf(start), x1 = XOf(end);
-        double yc = YCenterOf(pitch, r);
+        double yc = YCenterOf(pitch, r, rowH);
         return new Rect(x0, yc - barH / 2, Math.Max(2.5, x1 - x0), barH);
     }
 
@@ -494,11 +532,14 @@ public sealed class PianoRoll : Control
     {
         int best = -1;
         double bestDy = double.MaxValue;
+        // 音域与行高在循环外算一次，循环里只传值（每音重算就是 O(N²)，见 UI-03）
+        var r = PitchRange();
+        double rowH = RowH(r);
         for (int i = _notes.Count - 1; i >= 0; i--)
         {
             var n = _notes[i];
             if (n.End < _viewFrom || n.Start > _viewTo) continue;
-            var rect = RectOf(n.Pitch, n.Start, n.End);
+            var rect = RectOf(n.Pitch, n.Start, n.End, r, rowH);
             if (rect.Inflate(3).Contains(p)) return i;
             if (p.X >= rect.X - 4 && p.X <= rect.Right + 4)
             {
@@ -506,7 +547,7 @@ public sealed class PianoRoll : Control
                 if (dy < bestDy) { bestDy = dy; best = i; }
             }
         }
-        double limit = Math.Max(4, RowH(PitchRange()) * 0.55);
+        double limit = Math.Max(4, rowH * 0.55);
         return bestDy <= limit ? best : -1;
     }
 
@@ -515,6 +556,25 @@ public sealed class PianoRoll : Control
     /// 于是永远进不了"移动"分支 —— 短音符根本拖不动。按宽度比例收窄可避免。
     /// </summary>
     private static double GrabBand(double noteWidth) => Math.Min(EdgeGrabPx, Math.Max(2.0, noteWidth * 0.3));
+
+    /// <summary>
+    /// 命中的音符该抓哪一端。窄音符（最小宽 2.5）上左右两条抓取带会重叠，
+    /// 原来"先判左端、重叠就走改尾"的顺序让左端几乎点不中；重叠时按离哪端更近来判（UI-17）。
+    /// </summary>
+    private static DragMode EdgeAt(Rect rect, double x)
+    {
+        double band = GrabBand(rect.Width);
+        bool nearLeft = x <= rect.Left + band;
+        bool nearRight = x >= rect.Right - band;
+        if (nearLeft && nearRight)
+        {
+            if (x - rect.Left <= rect.Right - x) nearRight = false;
+            else nearLeft = false;
+        }
+        if (nearLeft) return DragMode.ResizeL;
+        if (nearRight) return DragMode.ResizeR;
+        return DragMode.Move;
+    }
 
     // ================= 绘制 =================
 
@@ -537,7 +597,7 @@ public sealed class PianoRoll : Control
             if (n.End <= n.Start) continue;
             if (n.End < _viewFrom || n.Start > _viewTo) continue;   // 视口外不参与绘制
             double x0 = XOf(n.Start), x1 = XOf(n.End);
-            double yc = YCenterOf(n.Pitch, (lo, hi));
+            double yc = YCenterOf(n.Pitch, (lo, hi), rowH);
             var rect = new Rect(x0, yc - barH / 2, Math.Max(2.5, x1 - x0), barH);
 
             if (!_inRange.Contains(n.Pitch))
@@ -589,8 +649,7 @@ public sealed class PianoRoll : Control
     private void DrawTrimNote(DrawingContext ctx)
     {
         if (_trimmedLead <= 0.05) return;
-        var ft = new FormattedText($"已剪掉开头 {_trimmedLead:F1}s 空拍",
-            CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Face, 10.5, MutedBrush);
+        var ft = TextOf($"已剪掉开头 {_trimmedLead:F1}s 空拍", 10.5, MutedBrush);
         ctx.DrawText(ft, new Point(KeyW + 6, RulerH + PlotH - ft.Height - 2));
     }
 
@@ -646,10 +705,9 @@ public sealed class PianoRoll : Control
             var brush = _hoverKey == p ? KeySel : (IsBlackKey(p) ? KeyBlack : KeyWhite);
             ctx.FillRectangle(brush, rect);
 
-            // 只标 C（各家的通行做法）：行高很薄时也只标 C 才不会糊成一片
+            // 只标 do（各家的通行做法）：行高很薄时也只标 do 才不会糊成一片
             if (rowH < 7 || Music.Mod(p, 12) != 0) continue;
-            var ft = new FormattedText(Music.NoteName(p), CultureInfo.InvariantCulture,
-                FlowDirection.LeftToRight, Face, 9, TextBrush);
+            var ft = TextOf(Music.SolfegeName(p), 9, TextBrush);
             ctx.DrawText(ft, new Point(KeyW - 4 - ft.Width, y + (rowH - ft.Height) / 2));
         }
     }
@@ -667,13 +725,16 @@ public sealed class PianoRoll : Control
                     ctx.DrawGeometry(VoiceBrushOf(v), null, g);
         }
 
+        // 下面的循环逐音符求矩形，音域与行高先算一次（UI-03）
+        double rowH = RowH(range);
+
         // 拖动中：用底色擦掉原位，再画临时块（不重建几何缓存）
         if (_mode is DragMode.Move or DragMode.ResizeL or DragMode.ResizeR && _dragNow.Count > 0)
         {
             foreach (var o in _dragNow)
             {
-                ctx.FillRectangle(Bg, RectOf(o.Note.Pitch, o.Note.Start, o.Note.End).Inflate(2));
-                var r = RectOf(o.Pitch, o.Start, o.End);
+                ctx.FillRectangle(Bg, RectOf(o.Note.Pitch, o.Note.Start, o.Note.End, range, rowH).Inflate(2));
+                var r = RectOf(o.Pitch, o.Start, o.End, range, rowH);
                 ctx.FillRectangle(_inRange.Contains(o.Pitch) ? VoiceBrushOf(VoiceOfNote(o.Note)) : SkipBrush, r);
                 ctx.DrawRectangle(null, SelPen, r);
             }
@@ -683,13 +744,13 @@ public sealed class PianoRoll : Control
         if (_hover >= 0 && _hover < _notes.Count && !_sel.Contains(_hover))
         {
             var n = _notes[_hover];
-            ctx.DrawRectangle(null, HoverPen, RectOf(n.Pitch, n.Start, n.End).Inflate(1.5));
+            ctx.DrawRectangle(null, HoverPen, RectOf(n.Pitch, n.Start, n.End, range, rowH).Inflate(1.5));
         }
         foreach (int i in _sel)
         {
             if (i < 0 || i >= _notes.Count) continue;
             var n = _notes[i];
-            ctx.DrawRectangle(null, SelPen, RectOf(n.Pitch, n.Start, n.End).Inflate(1.5));
+            ctx.DrawRectangle(null, SelPen, RectOf(n.Pitch, n.Start, n.End, range, rowH).Inflate(1.5));
         }
     }
 
@@ -709,8 +770,7 @@ public sealed class PianoRoll : Control
                 if (t > _viewTo) break;
                 double x = XOf(t);
                 ctx.DrawLine(BarPen, new Point(x, RulerH - 7), new Point(x, RulerH));
-                var ft = new FormattedText((k + 1).ToString(), CultureInfo.InvariantCulture,
-                    FlowDirection.LeftToRight, Face, 9.5, MutedBrush);
+                var ft = TextOf((k + 1).ToString(), 9.5, MutedBrush);
                 ctx.DrawText(ft, new Point(x + 3, 1));
             }
         }
@@ -721,8 +781,7 @@ public sealed class PianoRoll : Control
             {
                 double x = XOf(t);
                 ctx.DrawLine(BarPen, new Point(x, RulerH - 6), new Point(x, RulerH));
-                var ft = new FormattedText(FormatSeconds(t), CultureInfo.InvariantCulture,
-                    FlowDirection.LeftToRight, Face, 9.5, MutedBrush);
+                var ft = TextOf(FormatSeconds(t), 9.5, MutedBrush);
                 ctx.DrawText(ft, new Point(x + 3, 1));
             }
         }
@@ -751,7 +810,7 @@ public sealed class PianoRoll : Control
         ctx.DrawGeometry(HeadBrush, null, head);
     }
 
-    /// <summary>悬停 / 拖动时显示音名、时间与选中数量。</summary>
+    /// <summary>悬停 / 拖动时显示简谱音高、时间与选中数量。</summary>
     private void DrawReadout(DrawingContext ctx)
     {
         string? text = null;
@@ -759,17 +818,16 @@ public sealed class PianoRoll : Control
         {
             var o = _dragNow[0];
             string extra = _dragNow.Count > 1 ? $"   （{_dragNow.Count} 个）" : "";
-            text = $"{Music.NoteName(o.Pitch)}   {o.Start:F2} - {o.End:F2}s{extra}";
+            text = $"{Music.SolfegeName(o.Pitch)}   {o.Start:F2} - {o.End:F2}s{extra}";
         }
         else if (_hover >= 0 && _hover < _notes.Count)
         {
             var n = _notes[_hover];
-            text = $"{Music.NoteName(n.Pitch)}   {n.Start:F2} - {n.End:F2}s";
+            text = $"{Music.SolfegeName(n.Pitch)}   {n.Start:F2} - {n.End:F2}s";
         }
         if (text is null) return;
 
-        var ft = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-                                   Face, 12, TextBrush);
+        var ft = TextOf(text, 12, TextBrush);
         var box = new Rect(KeyW + 4, RulerH + 4, ft.Width + 12, ft.Height + 6);
         ctx.DrawRectangle(ReadoutBg, ReadoutBorder, box, 4, 4);
         ctx.DrawText(ft, new Point(box.X + 6, box.Y + 3));
@@ -803,7 +861,7 @@ public sealed class PianoRoll : Control
             _mode = DragMode.Pan;
             _pressPt = p;
             e.Pointer.Capture(this);
-            Cursor = new Cursor(StandardCursorType.SizeWestEast);
+            Cursor = SizeWECursor;
             e.Handled = true;
             return;
         }
@@ -862,6 +920,10 @@ public sealed class PianoRoll : Control
             InvalidateVisual();
             RaiseSelectionChanged();
             NoteAuditioned?.Invoke(n.Pitch);
+            // 新音立刻提交：只等松手提交的话，按下与松开之间没有指针移动（原地双击）时
+            // 这个音只留在卷帘内部，试听、导出与撤销都看不到它（UI-04）。
+            // 原地双击只有这一步；继续拖动定长时松手再按最终长度提交（见 ResizeChanged）。
+            Commit("加音");
             e.Handled = true;
             return;
         }
@@ -888,15 +950,13 @@ public sealed class PianoRoll : Control
             RaiseSelectionChanged();
 
             var rect = RectOf(_notes[hit].Pitch, _notes[hit].Start, _notes[hit].End);
-            double band = GrabBand(rect.Width);
-            bool nearLeft = p.X <= rect.Left + band;
-            bool nearRight = p.X >= rect.Right - band;
+            var edge = EdgeAt(rect, p.X);
 
             BeginDrag(_notes[hit], p);
             NoteAuditioned?.Invoke(_notes[hit].Pitch);
-            if (nearLeft && !nearRight) { _mode = DragMode.ResizeL; Cursor = new Cursor(StandardCursorType.SizeWestEast); }
-            else if (nearRight) { _mode = DragMode.ResizeR; Cursor = new Cursor(StandardCursorType.SizeWestEast); }
-            else { _mode = DragMode.Move; Cursor = new Cursor(StandardCursorType.SizeAll); }
+            if (edge == DragMode.ResizeL) { _mode = DragMode.ResizeL; Cursor = SizeWECursor; }
+            else if (edge == DragMode.ResizeR) { _mode = DragMode.ResizeR; Cursor = SizeWECursor; }
+            else { _mode = DragMode.Move; Cursor = SizeAllCursor; }
         }
         else
         {
@@ -975,7 +1035,7 @@ public sealed class PianoRoll : Control
     {
         base.OnPointerReleased(e);
         e.Pointer.Capture(null);
-        Cursor = new Cursor(StandardCursorType.Hand);
+        Cursor = HandCursor;
         var mode = _mode;
         _mode = DragMode.None;
 
@@ -996,7 +1056,8 @@ public sealed class PianoRoll : Control
 
             case DragMode.ResizeL:
             case DragMode.ResizeR:
-                if (_dragMoved) CommitDrag("改长度");
+                // 与手势起点比较而不是看 _dragMoved：原地双击加音后松手不再压一次空快照（UI-04）
+                if (ResizeChanged()) CommitDrag("改长度");
                 break;
 
             case DragMode.Erase:
@@ -1096,9 +1157,10 @@ public sealed class PianoRoll : Control
         double d = TimeAt(p.X) - _anchorSec;
         int dp = PitchAt(p.Y, PitchRange()) - _anchorPitch;
 
-        // 吸附"音符边"而不是光标：让基准音的头或尾落在格子上，取需要修正更小的那个
+        // 吸附"音符边"而不是光标：让基准音的头或尾落在格子上，取需要修正更小的那个。
+        // 按住 Shift 时临时关闭吸附（与类注释一致，UI-15）。
         var prim = _dragBase[0];
-        if (SnapEnabled && SnapSeconds > 0)
+        if (!ShiftHeld(mods) && SnapEnabled && SnapSeconds > 0)
         {
             double s = prim.Start + d, e = prim.End + d;
             double adjS = Snap(s) - s, adjE = Snap(e) - e;
@@ -1132,7 +1194,8 @@ public sealed class PianoRoll : Control
     {
         if (_dragBase.Count == 0) return;
         double t = TimeAt(p.X);
-        if (SnapEnabled && SnapSeconds > 0) t = Snap(t);
+        // 按住 Shift 临时关闭吸附（UI-15）
+        if (!ShiftHeld(mods) && SnapEnabled && SnapSeconds > 0) t = Snap(t);
 
         // 同样以基准为准：改左端时右端取基准的尾，改右端时左端取基准的头
         var b = _dragBase[0];
@@ -1143,6 +1206,17 @@ public sealed class PianoRoll : Control
         _dragNow.Add((b.Note, b.Pitch, st, en));
         _dragMoved = true;
         InvalidateVisual();
+    }
+
+    /// <summary>手势结束时，改长度的结果与手势起点有没有差异（逐字段比较）。</summary>
+    private bool ResizeChanged()
+    {
+        if (_dragNow.Count == 0 || _dragBase.Count == 0) return false;
+        var a = _dragBase[0];
+        var b = _dragNow[0];
+        return b.Pitch != a.Pitch
+            || Math.Abs(b.Start - a.Start) > 1e-9
+            || Math.Abs(b.End - a.End) > 1e-9;
     }
 
     /// <summary>把拖动结果写回谱面：重建列表 + 排序 + 重映射选择，最后一次性提交。</summary>
@@ -1220,20 +1294,34 @@ public sealed class PianoRoll : Control
         foreach (int i in _sel) if (i >= 0 && i < _notes.Count) selRefs.Add(_notes[i]);
 
         var rebuilt = new List<(RawNote N, bool Sel)>(_notes.Count);
+        bool anyChange = false;
         foreach (var n in _notes)
         {
             if (!selRefs.Contains(n)) { rebuilt.Add((n, false)); continue; }
             int p = Math.Clamp(n.Pitch + dp, 0, 127);
-            double st = Math.Max(0, n.Start + dt);
+            // 起始时间已经在 0 又往左挪时这个音整体不位移：否则 Start 被夹在 0，End 仍减一个 dt，
+            // 音符会被一步一步截短（UI-07）
+            double d = dt < 0 && n.Start <= 0 ? 0 : dt;
+            double st = Math.Max(0, n.Start + d);
+            double en = Math.Max(st + MinNoteSeconds, n.End + d);
+            if (p == n.Pitch && Math.Abs(st - n.Start) < 1e-9 && Math.Abs(en - n.End) < 1e-9)
+            {
+                rebuilt.Add((n, true));   // 这个音没变，保留原件
+                continue;
+            }
+            anyChange = true;
             rebuilt.Add((new RawNote
             {
                 Pitch = p,
                 Start = st,
-                End = Math.Max(st + MinNoteSeconds, n.End + dt),
+                End = en,
                 Velocity = n.Velocity,
                 Voice = n.Voice      // 微调不改声轨归属
             }, true));
         }
+        // 逐字段比较后全都没变化就不提交：否则会在撤销栈里压一步空操作并清空重做栈（UI-07）
+        if (!anyChange) return;
+
         rebuilt.Sort((a, b) => a.N.Start.CompareTo(b.N.Start));
         var next = new List<RawNote>(rebuilt.Count);
         var newSel = new HashSet<int>();
@@ -1253,13 +1341,12 @@ public sealed class PianoRoll : Control
         int h = p.X < KeyW ? -1 : HitTest(p);
         int hk = p.X < KeyW ? PitchAt(p.Y, PitchRange()) : -1;
 
-        var want = StandardCursorType.Hand;
+        var want = HandCursor;
         if (h >= 0)
         {
             var rect = RectOf(_notes[h].Pitch, _notes[h].Start, _notes[h].End);
-            double band = GrabBand(rect.Width);
-            want = p.X <= rect.Left + band || p.X >= rect.Right - band
-                ? StandardCursorType.SizeWestEast : StandardCursorType.SizeAll;
+            var edge = EdgeAt(rect, p.X);
+            want = edge is DragMode.ResizeL or DragMode.ResizeR ? SizeWECursor : SizeAllCursor;
         }
         if (h != _hover || hk != _hoverKey)
         {
@@ -1267,17 +1354,20 @@ public sealed class PianoRoll : Control
             _hoverKey = hk;
             InvalidateVisual();
         }
-        Cursor = new Cursor(want);
+        if (!ReferenceEquals(Cursor, want)) Cursor = want;
     }
 
     private void ApplyMarquee(Rect r)
     {
         _sel.Clear();
+        // 音域与行高在循环外算一次（UI-03）
+        var rng = PitchRange();
+        double rowH = RowH(rng);
         for (int i = 0; i < _notes.Count; i++)
         {
             var n = _notes[i];
             if (n.End < _viewFrom || n.Start > _viewTo) continue;
-            if (RectOf(n.Pitch, n.Start, n.End).Intersects(r)) _sel.Add(i);
+            if (RectOf(n.Pitch, n.Start, n.End, rng, rowH).Intersects(r)) _sel.Add(i);
         }
         RaiseSelectionChanged();
     }
@@ -1292,18 +1382,14 @@ public sealed class PianoRoll : Control
         NoteAuditioned?.Invoke(pitch);
     }
 
-    /// <summary>右键擦除：擦掉光标下的音。删除会移动下标，所以选择集要同步平移。</summary>
+    /// <summary>右键擦除：擦掉光标下的音。删除会移动下标，所以选择集要同步平移，悬停下标直接作废。</summary>
     private void EraseAt(Point p)
     {
         int hit = HitTest(p);
-        if (hit < 0 || _eraseDone.Contains(hit)) return;
+        if (hit < 0) return;
+        var note = _notes[hit];
+        if (!_eraseDone.Add(note)) return;
         _notes.RemoveAt(hit);
-        _eraseDone.Add(hit);
-
-        var shiftDown = new HashSet<int>();
-        foreach (int i in _eraseDone) shiftDown.Add(i > hit ? i - 1 : i);
-        _eraseDone.Clear();
-        foreach (int i in shiftDown) _eraseDone.Add(i);
 
         var remapped = new HashSet<int>();
         foreach (int i in _sel)
@@ -1314,6 +1400,8 @@ public sealed class PianoRoll : Control
         _sel.Clear();
         foreach (int i in remapped) _sel.Add(i);
 
+        // 悬停框记的是下标，删除后它已经指到别的音上；置 -1，等下一次指针移动时重算（UI-18）
+        _hover = -1;
         EnsureBarsInvalid();
         InvalidateVisual();
     }

@@ -112,6 +112,9 @@ public partial class MainWindow
                 {
                     Console.Error.WriteLine("UI snapshot failed: " + ex);
                 }
+                // A19：退出前先走一遍主窗的显式清理（停播放与试听、停热键与 MIDI 服务、
+                // 释放按键、移除托盘图标），不再直接 Environment.Exit 把清理全部跳过
+                window.DevCleanUpForExit();
                 Environment.Exit(0);
             };
             timer.Start();
@@ -337,6 +340,7 @@ public partial class MainWindow
             timer.Stop();
             Log("键位快照计时器触发");
             Shot(win, path);
+            owner.DevCleanUpForExit();   // A19：退出前走一遍显式清理
             Environment.Exit(0);
         };
         timer.Start();
@@ -348,11 +352,13 @@ public partial class MainWindow
             guard.Stop();
             Log("兜底计时器触发");
             Shot(win, path);
+            owner.DevCleanUpForExit();   // A19：退出前走一遍显式清理
             Environment.Exit(0);
         };
         guard.Start();
     }
 
+    /// <summary>把任意窗口渲染成 PNG。</summary>
     private static void Shot(Window win, string path)
     {
         try
@@ -360,15 +366,15 @@ public partial class MainWindow
             var root = (Visual?)win.Content ?? win;
             int w = Math.Max(1, (int)Math.Ceiling(root.Bounds.Width));
             int h = Math.Max(1, (int)Math.Ceiling(root.Bounds.Height));
-            Log($"拍键位窗口 {w}x{h} IsVisible={win.IsVisible}");
+            Log($"拍窗口 {w}x{h} IsVisible={win.IsVisible}");
             Save(root, path, new PixelSize(w, h), new Vector(96, 96));
-            Log($"键位快照已写：{path} 存在={System.IO.File.Exists(path)}");
-            Console.WriteLine($"Keymap snapshot saved: {path}");
+            Log($"快照已写：{path} 存在={System.IO.File.Exists(path)}");
+            Console.WriteLine($"Window snapshot saved: {path}");
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine("keymap snapshot failed: " + ex);
-            Log("keymap snapshot failed: " + ex);
+            Console.Error.WriteLine("window snapshot failed: " + ex);
+            Log("window snapshot failed: " + ex);
         }
     }
 

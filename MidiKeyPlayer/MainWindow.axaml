@@ -3,8 +3,8 @@
         xmlns:local="clr-namespace:MidiKeyPlayer"
         x:Class="MidiKeyPlayer.MainWindow"
         Title="MIDI 按键播放器"
-        Width="1120" Height="860"
-        MinWidth="980" MinHeight="760"
+        Width="1120" Height="920"
+        MinWidth="980" MinHeight="820"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource BrushCanvas}"
         FontFamily="{DynamicResource FontUi}"
@@ -186,16 +186,27 @@
                        Text="打开 MIDI 文件，再在左侧点一行作为主旋律"/>
             <TextBlock x:Name="LblWarn" TextWrapping="Wrap" TextAlignment="Center"
                        FontSize="{DynamicResource FontSmall}" Text=""/>
+            <!-- UI-01 / UI-02：常驻的「有未导出改动」提示。手动改动只在内存里，
+                 换歌与关窗都会丢弃，所以不能只靠「还原为自动」按钮变亮来暗示。 -->
+            <TextBlock x:Name="TxtEditMark" IsVisible="False" TextWrapping="Wrap" TextAlignment="Center"
+                       FontSize="{DynamicResource FontSmall}" FontWeight="SemiBold"
+                       Foreground="{DynamicResource BrushWarn}"
+                       Text="⚠ 有未导出的手动改动：改动只在内存里，换歌或关窗会丢弃。请先点「导出 MIDI…」保存。"/>
           </StackPanel>
         </Border>
       </StackPanel>
 
-      <Border Grid.Row="1" Classes="card" Margin="{DynamicResource CardGap}">
+      <!-- ClipToBounds：窗口拉到最小高度时这张卡的高度会被压到内容需要的值以下，
+           卡片里的子元素原来会画到自己格子之外（就是「卷帘盖住工具栏按钮」那条）。
+           裁掉溢出，宁可少显示一点，也不许越界压别的控件。 -->
+      <Border Grid.Row="1" Classes="card" Margin="{DynamicResource CardGap}" ClipToBounds="True">
         <!-- 外层两列：左=工具栏+卷帘+走带，右=用法说明。
              说明栏必须跨整张卡的高度，不能只跟卷帘同一行 —— 卷帘那一行只有几十像素高，
              说明会被裁得只剩开头几行，还得滚动才看得到。 -->
-        <Grid ColumnDefinitions="*,Auto">
-          <Grid Grid.Column="0" RowDefinitions="Auto,*,Auto">
+        <Grid ColumnDefinitions="*,Auto" ClipToBounds="True">
+          <!-- 卷帘所在的格子（Grid.Row=1，`*`）。ClipToBounds 是这条遮挡的正面修复：
+               格子被压小的时候卷帘原来会溢出到相邻的工具栏行上。 -->
+          <Grid Grid.Column="0" RowDefinitions="Auto,*,Auto" ClipToBounds="True">
           <!-- 卷帘编辑工具栏。
                原来是单行横向 StackPanel：窗口拉到 MinWidth(980) 时右栏只剩约 470px，
                一行放不下十来个控件，末端的「缩小 / 放大 / 全曲」被挤出卡片右缘、显示不全。
@@ -249,8 +260,12 @@
                       ToolTip.Tip="在卷帘右侧显示操作说明。再点一下收起，把宽度让给卷帘"/>
             </Grid>
           </Grid>
-          <!-- 卷帘：上=时间标尺，左=琴键栏 -->
-          <local:PianoRoll x:Name="Roll" Grid.Row="1" MinHeight="56" Margin="0,0,0,10"
+          <!-- 卷帘：上=时间标尺，左=琴键栏。
+               MinHeight 从 150 降到 90：窗口到最小高度（980x820）时右栏只有约 100px
+               留给卷帘，150 放不下就会把卡片顶出格子。90 是标尺 20 + 两行琴键的可用下限。
+               ClipToBounds 再兜一层：控制自身不越界画（PianoRoll 构造函数里也设了，这里写死更明确）。 -->
+          <local:PianoRoll x:Name="Roll" Grid.Row="1" MinHeight="90" Margin="0,0,0,10"
+                           ClipToBounds="True"
                            ToolTip.Tip="标尺拖动=定位；琴键栏点击=选中该音高；拖音符=移动；拖任一端=改长度；空白拖=框选；双击空白=加音；右键=删音；Ctrl+A 全选；Esc 清空；方向键微调"/>
           <Grid Grid.Row="2" RowDefinitions="Auto,Auto">
             <!-- 走带按钮与热键提示同一行。用 WrapPanel 而不是 Grid 的 Auto 列：
@@ -284,7 +299,9 @@
           </Grid>
 
           <!-- 帮助：跨整张卡的高度，紧挨卷帘右侧。工具栏的「帮助」按钮可收起。 -->
-          <Border x:Name="RollHelp" Grid.Column="1" Width="188" Margin="12,0,0,0" Padding="10,8"
+          <!-- UI-12：宽度 188 时装不下「左列操作 + 右列说明」，右列尾部被裁。
+               加宽到 248，并把右列改成 Wrap 兜底：正常不换行，字体度量有出入时也不丢字。 -->
+          <Border x:Name="RollHelp" Grid.Column="1" Width="248" Margin="12,0,0,0" Padding="10,8"
                   Background="{DynamicResource BrushSurfaceAlt}"
                   BorderBrush="{DynamicResource BrushBorder}" BorderThickness="1" CornerRadius="8">
             <Grid RowDefinitions="Auto,*">
@@ -302,7 +319,7 @@
                              Foreground="{DynamicResource BrushText}" TextAlignment="Left"
                              Text="拖音符&#x0a;拖音符两端&#x0a;空白处拖&#x0a;双击空白&#x0a;右键&#x0a;点左侧琴键&#x0a;标尺点或拖&#x0a;方向键&#x0a;Delete&#x0a;Ctrl+A&#x0a;Esc&#x0a;Ctrl+Z / Y&#x0a;滚轮&#x0a;Shift+滚轮&#x0a;中键拖动"/>
                   <TextBlock Grid.Column="1" LineHeight="16" Margin="10,0,0,0" FontSize="{DynamicResource FontCaption}"
-                             Foreground="{DynamicResource BrushTextSecondary}" TextWrapping="NoWrap"
+                             Foreground="{DynamicResource BrushTextSecondary}" TextWrapping="Wrap"
                              Text="移动（多选整组动）&#x0a;改长度（左改头右改尾）&#x0a;框选多个音符&#x0a;加一个音&#x0a;删音（可按住连擦）&#x0a;选中该音高全部音符&#x0a;定位播放位置&#x0a;微调（Shift 加速）&#x0a;删除所选&#x0a;全选&#x0a;清空选择&#x0a;撤销 / 重做&#x0a;缩放&#x0a;左右平移&#x0a;左右平移"/>
                 </Grid>
               </ScrollViewer>
@@ -312,7 +329,7 @@
       </Border>
 
       <!-- 选项区：分四行，避免一个 WrapPanel 里堆十几个控件 -->
-      <StackPanel x:Name="OptionsArea" Grid.Row="2" Spacing="10" Margin="{DynamicResource CardGap}">
+      <StackPanel x:Name="OptionsArea" Grid.Row="2" Spacing="8" Margin="{DynamicResource CardGap}">
 
         <!-- 第 1 行：MIDI 设备接入。演奏中这一行用不到，所以放最上面，
              勾了「实时演奏」就直接开着；不勾不影响任何文件播放功能。 -->
@@ -351,7 +368,7 @@
                 <Slider x:Name="SliderMidiOctave" Width="110" Minimum="1" Maximum="6" Value="4"
                         TickFrequency="1" IsSnapToTickEnabled="True" VerticalAlignment="Center"
                         ValueChanged="MidiOption_Changed"/>
-                <TextBlock x:Name="TxtMidiOctave" Text="C4" Classes="value" Width="52"/>
+                <TextBlock x:Name="TxtMidiOctave" Text="1" Classes="value" Width="52"/>
               </StackPanel>
 
               <CheckBox x:Name="ChkMidiAutoFit" Content="自动贴合音域" FontSize="{DynamicResource FontSmall}"
@@ -373,24 +390,26 @@
 
         <!-- 第 1 行：演奏参数 + 输入设置 + 播放前自检。
              三块原本各占一张卡，卡片自己的上下内边距与卡片间距合起来吃掉约 40px；
-             竖向键位预览图需要这段高度，所以合成一张卡、用行间距分开，控件与顺序都不变。 -->
+             合成一张卡、用行间距分开，控件与顺序都不变。 -->
         <Border Classes="card" Padding="14,10">
           <Grid RowDefinitions="Auto,*" RowSpacing="8">
           <StackPanel Grid.Row="0" Spacing="8">
             <WrapPanel ItemSpacing="22" LineSpacing="8">
             <StackPanel Orientation="Horizontal" Spacing="8">
               <TextBlock Text="速度" Classes="label" MinWidth="34"/>
-              <Slider x:Name="SliderSpeed" Width="126" Minimum="50" Maximum="200" Value="100"
+              <Slider x:Name="SliderSpeed" Width="126" Minimum="10" Maximum="400" Value="100"
                       TickFrequency="5" IsSnapToTickEnabled="True" ValueChanged="SpeedChanged"
-                      VerticalAlignment="Center"/>
-              <TextBlock x:Name="TxtSpeed" Text="100%" Classes="value" Width="40"/>
+                      VerticalAlignment="Center"
+                      ToolTip.Tip="10% = 慢速练习，400% = 快速过谱（引擎支持 10%–400%）"/>
+              <TextBlock x:Name="TxtSpeed" Text="100%" Classes="value" Width="44"/>
             </StackPanel>
 
             <StackPanel Orientation="Horizontal" Spacing="8">
               <TextBlock Text="移调" Classes="label" MinWidth="34"/>
-              <Slider x:Name="SliderTranspose" Width="126" Minimum="-10" Maximum="10" Value="0"
+              <Slider x:Name="SliderTranspose" Width="126" Minimum="-24" Maximum="24" Value="0"
                       TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="SpeedChanged"
-                      VerticalAlignment="Center"/>
+                      VerticalAlignment="Center"
+                      ToolTip.Tip="±24 半音（±2 个八度），与设置层、实时演奏同口径"/>
               <TextBlock x:Name="TxtTranspose" Text="0" Classes="value" Width="32"/>
             </StackPanel>
 
@@ -398,6 +417,11 @@
                     Padding="12,5" Classes="secondary" VerticalAlignment="Center"
                     Click="BtnAutoTranspose_Click"
                     ToolTip.Tip="自动移调，让所有音落进乐器音域"/>
+
+            <Button x:Name="BtnNaturalTranspose" Content="自然音最多" FontSize="{DynamicResource FontSmall}"
+                    Padding="12,5" Classes="secondary" VerticalAlignment="Center"
+                    Click="BtnNaturalTranspose_Click"
+                    ToolTip.Tip="自动移调，让最多音落在自然音上（口琴等没有半音键的乐器用）。自然音同样多时取超音域更少的"/>
 
             <StackPanel Orientation="Horizontal" Spacing="8">
               <TextBlock Text="倒计时" Classes="label" MinWidth="46"/>
@@ -480,7 +504,7 @@
                 <Button x:Name="BtnKeymap" Content="键位设置…" FontSize="{DynamicResource FontSmall}"
                         Padding="12,5" Classes="secondary" VerticalAlignment="Center"
                         Click="Keymap_Click"
-                        ToolTip.Tip="打开键位设置窗口：主键、八度上/下、升半音、音域、超界与缺音策略"/>
+                        ToolTip.Tip="打开键位设置窗口：方案、按键绑定、功能键"/>
                 <TextBlock x:Name="TxtKeymapName" Classes="caption" VerticalAlignment="Center"
                            MaxWidth="180" TextTrimming="CharacterEllipsis"
                            ToolTip.Tip="当前键位方案名"/>

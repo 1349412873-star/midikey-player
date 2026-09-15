@@ -15,7 +15,8 @@
   <!-- 文字 -->
   <SolidColorBrush x:Key="BrushText"          Color="#1F2933"/>
   <SolidColorBrush x:Key="BrushTextSecondary" Color="#5B6673"/>
-  <SolidColorBrush x:Key="BrushTextMuted"     Color="#8A93A0"/>
+  <!-- 弱化色 #8A93A0 在白底上只有 3.1:1，低于 WCAG AA 正文 4.5:1；提到 #6B7480（约 4.6:1）。 -->
+  <SolidColorBrush x:Key="BrushTextMuted"     Color="#6B7480"/>
 
   <!-- 品牌绿 -->
   <SolidColorBrush x:Key="BrushAccent"         Color="#2E8B57"/>
@@ -33,7 +34,7 @@
   <!-- ===================== 声轨配色（12 色，唯一真源） =====================
        深色底与浅色底上都能读。分配：声轨序号 % 12。
        左侧列表文字与卷帘音符共用同一号色，声轨一一对应。
-       未参与合奏的声轨由代码降低不透明度，打击乐轨用灰（BrushTextMuted）。
+       未参与演奏的声轨统一用弱化灰 BrushTextMuted（不叠加不透明度，否则对比度不足）。
        卷帘与列表都不写裸色值，一律按序号取这里的资源。 -->
   <SolidColorBrush x:Key="BrushVoice0"  Color="#4EA1FF"/>
   <SolidColorBrush x:Key="BrushVoice1"  Color="#4ED8A0"/>
@@ -58,7 +59,8 @@
   <SolidColorBrush x:Key="BrushInfoBorder"   Color="#BBD6F5"/>
   <SolidColorBrush x:Key="BrushInfoText"     Color="#1B4F91"/>
 
-  <!-- 倒计时时整窗的暖色提醒底 -->
+  <!-- 倒计时时整窗的暖色提醒底。XAML 里没有引用：MainWindow.SetCountdownChrome
+       用 TryFindResource 按名字读它，所以不要当死键删掉。 -->
   <SolidColorBrush x:Key="BrushCountdownChrome" Color="#FFF3E4D8"/>
 
   <!-- ===================== 字体 =====================
@@ -66,9 +68,12 @@
   <FontFamily x:Key="FontUi">Microsoft YaHei UI, 微软雅黑, PingFang SC, Hiragino Sans GB, Noto Sans CJK SC, Source Han Sans SC, Segoe UI, Helvetica Neue, sans-serif</FontFamily>
   <FontFamily x:Key="FontMono">Cascadia Mono, Consolas, SF Mono, Menlo, DejaVu Sans Mono, monospace</FontFamily>
 
-  <!-- ===================== 字号刻度（原来的 7 档收敛而来） ===================== -->
-  <x:Double x:Key="FontMicro">11</x:Double>
-  <x:Double x:Key="FontCaption">11.5</x:Double>
+  <!-- ===================== 字号刻度（原来的 7 档收敛而来） =====================
+       说明文字（列头、帮助栏、按钮小字）不小于 12.5px：11 / 11.5 太小，配合弱化色读不清（UI-08）。
+       FontTitle 由 XAML 按名字引用；FontDisplay 与 FontCountdown 只在代码里用
+       （MainWindow.ResourceFontSize 按名字读），所以这三个键都不要当死键删掉。 -->
+  <x:Double x:Key="FontMicro">12.5</x:Double>
+  <x:Double x:Key="FontCaption">12.5</x:Double>
   <x:Double x:Key="FontSmall">12.5</x:Double>
   <x:Double x:Key="FontBody">13.5</x:Double>
   <x:Double x:Key="FontTitle">15</x:Double>
