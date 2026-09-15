@@ -113,6 +113,7 @@ public partial class MainWindow : Window
         ChkAutoMinimize.IsChecked = _cfg.AutoMinimizeOnPlay;
         ChkChordMode.IsChecked = _cfg.ChordMode;
         TimingCombo.SelectedIndex = Math.Clamp(_cfg.TimingIndex, 0, 2);
+        RefreshRecentUi();   // 「最近打开」菜单按设置里的历史重建；没有历史时按钮置灰
 
         // 键位方案（Engine\KeymapProfile）：全局活动方案，实时演奏与文件播放共用。
         // 键位控件在独立的 KeymapWindow 里，主界面只显示方案名并提供一个入口按钮。
@@ -1134,6 +1135,106 @@ public partial class MainWindow : Window
         }
     }
 
+    // ================= 最近打开 =================
+    //
+    // 只记路径、只存进现有设置文件（AppConfig.RecentFiles）：不复制文件、不扫描目录。
+
+    /// <summary>
+    /// 载入成功后记进「最近打开」：同路径只留一条、最新的排最前，最多
+    /// <see cref="AppConfig.MaxRecentFiles"/> 条（去重与截断都在 AppConfig 里）。
+    /// 打开按钮与开发快照（DevUISnapshot / DevPreviewProbe）两条链路都经过 LoadMidiFile，所以只在这里记一次。
+    /// </summary>
+    private void RememberRecentFile(string path)
+    {
+        _cfg.RememberRecentFile(path);
+        SaveSettings();      // 立刻落盘：下次启动就能直接再打开
+        RefreshRecentUi();
+        InsertLog($"已记入「最近打开」：{System.IO.Path.GetFileName(path)}");
+    }
+
+    /// <summary>把一个路径移出「最近打开」并落盘（文件已被删或改名时用）。</summary>
+    private void ForgetRecentFile(string path)
+    {
+        _cfg.ForgetRecentFile(path);
+        SaveSettings();
+        RefreshRecentUi();
+    }
+
+    /// <summary>按当前历史重建「最近打开」菜单，并在列表为空时把按钮置灰。</summary>
+    private void RefreshRecentUi()
+    {
+        if (BtnRecent == null) return;
+        if (BtnRecent.Flyout is not MenuFlyout menu) return;
+
+        var files = _cfg.RecentFiles;
+        menu.Items.Clear();
+        if (files.Count == 0)
+        {
+            // 空的时候按钮本身是灰的，这一条只是兜底（菜单已打开时列表被清空）
+            menu.Items.Add(new MenuItem { Header = "还没有打开过文件", IsEnabled = false });
+        }
+        else
+        {
+            foreach (string path in files)
+            {
+                var item = new MenuItem
+                {
+                    Header = System.IO.Path.GetFileName(path),   // 菜单里只显示文件名
+                    Tag = path,
+                };
+                Avalonia.Controls.ToolTip.SetTip(item, path);    // 悬浮显示完整路径
+                item.Click += RecentFile_Click;
+                menu.Items.Add(item);
+            }
+            menu.Items.Add(new Separator());
+            var clear = new MenuItem { Header = "清空列表" };
+            clear.Click += ClearRecent_Click;
+            menu.Items.Add(clear);
+        }
+        BtnRecent.IsEnabled = files.Count > 0;
+    }
+
+    /// <summary>点「最近打开」里的某一项：先收起菜单，再走打开流程。</summary>
+    private void RecentFile_Click(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem mi || mi.Tag is not string path) return;
+        BtnRecent.Flyout?.Hide();
+        _ = OpenRecentFileAsync(path);
+    }
+
+    /// <summary>
+    /// 打开一个历史路径。文件已不在就提示并移出列表；还在就走与「打开 MIDI 文件…」同一条链路，
+    /// 所以「有未导出的手动改动要先确认」的保护照旧生效。
+    /// </summary>
+    private async Task OpenRecentFileAsync(string path)
+    {
+        try
+        {
+            if (!System.IO.File.Exists(path))
+            {
+                InsertLog($"文件已不在：{path}");
+                ForgetRecentFile(path);
+                return;
+            }
+            if (!await ConfirmDiscardEditsAsync("打开最近文件")) return;
+            LoadMidiFile(path);
+        }
+        catch (Exception ex)
+        {
+            InsertLog($"打开最近文件失败：{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>清空「最近打开」列表并落盘。</summary>
+    private void ClearRecent_Click(object? sender, RoutedEventArgs e)
+    {
+        BtnRecent.Flyout?.Hide();
+        _cfg.ClearRecentFiles();
+        SaveSettings();
+        RefreshRecentUi();
+        InsertLog("已清空「最近打开」列表。");
+    }
+
     /// <summary>
     /// 载入一个 MIDI 文件并刷新界面。打开按钮与开发快照（DevUISnapshot）共用这一条链路，
     /// 所以截图看到的就是用户点「打开 MIDI 文件」后的真实状态。
@@ -1165,6 +1266,7 @@ public partial class MainWindow : Window
             DropEditsIfAny("打开了新文件");
             ChooseRecommendedTrack();
             RefreshPreview();
+            RememberRecentFile(path);   // 载入成功才记：读不动的文件不进「最近打开」
             return true;
         }
         catch (Exception ex)
@@ -1667,7 +1769,7 @@ public partial class MainWindow : Window
         InsertLog($"自然音移调：{sign}{bestT} 半音后 {bestNatural} / {playable} 个音落在自然键上，"
                   + $"{bestAccidental} 个需要半音键，{bestSkip} 个没有对应的键。");
         if (bestAccidental > 0)
-            InsertLog("　其中需要半音键的音，换个带升音的方案才能弹（例如「36 键半音三排」）。");
+            InsertLog("　其中需要半音键的音，换个带升音的方案才能弹（例如「第五人格键位」）。");
         if (total > playable)
             InsertLog($"　另有 {total - playable} 个音在移调后超出 MIDI 音域（0 ~ 127）。");
         RefreshPreview();

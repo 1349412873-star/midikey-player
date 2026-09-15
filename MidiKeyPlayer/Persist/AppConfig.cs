@@ -62,6 +62,22 @@ public sealed class AppConfig
     public int MidiMinVelocity { get; set; } = 1;        // 力度下限（1 = 不过滤）
     public bool MidiAutoFit { get; set; } = true;        // 自动贴合音域
 
+    // —— MIDI 文件「最近打开」——
+    /// <summary>「最近打开」最多记这么多条，超出丢最旧的。</summary>
+    public const int MaxRecentFiles = 10;
+
+    private List<string> _recentFiles = new();
+
+    /// <summary>
+    /// 「最近打开」的 MIDI 文件路径：最新的排最前，最多 <see cref="MaxRecentFiles"/> 条。
+    /// 只记路径，不复制文件。老设置文件没有这个字段时是空列表。
+    /// </summary>
+    public List<string> RecentFiles
+    {
+        get => _recentFiles;
+        set => _recentFiles = value ?? new List<string>();   // 设置文件里写成 null 也不能崩
+    }
+
     /// <summary>旧版本程序（HarpAutoPlayer）的设置目录名。</summary>
     private const string LegacyDirName = "HarpAutoPlayer";
 
@@ -108,6 +124,36 @@ public sealed class AppConfig
         s.TimingIndex = Math.Clamp(timingIndex, 0, 2);
     }
 
+    // ================= 最近打开 =================
+
+    /// <summary>把一个路径记进「最近打开」：同路径只留一条、最新的排最前、超出上限丢最旧的。</summary>
+    public void RememberRecentFile(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+        // 大小写不敏感：Windows 上同一条路径可能写成不同的大小写
+        _recentFiles.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
+        _recentFiles.Insert(0, path);
+        TrimRecentFiles();
+    }
+
+    /// <summary>把某个路径从「最近打开」里去掉（文件已被删或改名时用）。</summary>
+    public void ForgetRecentFile(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+        _recentFiles.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>清空「最近打开」列表。</summary>
+    public void ClearRecentFiles() => _recentFiles.Clear();
+
+    /// <summary>去掉空项并截到上限：读盘后（见 <see cref="Normalize"/>）与每次记录后都走一遍。</summary>
+    private void TrimRecentFiles()
+    {
+        _recentFiles.RemoveAll(string.IsNullOrWhiteSpace);
+        if (_recentFiles.Count > MaxRecentFiles)
+            _recentFiles.RemoveRange(MaxRecentFiles, _recentFiles.Count - MaxRecentFiles);
+    }
+
     /// <summary>
     /// 把读盘得到的值夹回合法区间：老设置文件里可能存着 500% 或 ±30。
     /// 写盘走 <see cref="Speed"/> / <see cref="Transpose"/> 的属性 setter，与这里同一套口径（FN-02 / VR-10）。
@@ -116,6 +162,7 @@ public sealed class AppConfig
     {
         Speed = Speed;
         Transpose = Transpose;
+        TrimRecentFiles();   // 最近打开：老设置文件里可能超过 10 条，也可能带空串
         if (PerProfile == null) return;
         foreach (var s in PerProfile.Values)
         {
@@ -216,6 +263,9 @@ public sealed class AppConfig
 [JsonSerializable(typeof(AppConfig))]
 [JsonSerializable(typeof(ProfileSettings))]
 [JsonSerializable(typeof(KeymapProfile))]
+// 「最近打开」的路径列表。它挂在 AppConfig 上，本来也会被连带生成；这里显式登记一次，
+// 免得哪天元数据缺失时 Save() 只写一条日志，表现为「列表记不住」这种静默失效。
+[JsonSerializable(typeof(List<string>))]
 internal sealed partial class ConfigJson : JsonSerializerContext
 {
 }
