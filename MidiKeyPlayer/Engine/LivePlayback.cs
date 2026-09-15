@@ -28,7 +28,9 @@ public readonly record struct LiveMapping(
 /// - 文件播放：整首谱面提前算好事件表，按音乐时间派发。
 /// - 设备实时：来一个音发一个音，只留修饰键提前量。
 ///
-/// 键位、音域、超界与缺音行为全部读 <see cref="KeymapProfile"/>：音乐键、八度键、升半音键都是方案里的键名。
+/// 键位、音域与修饰键开关全部读 <see cref="KeymapProfile"/>：音乐键、八度键、升半音键都是方案里的键名。
+/// 规则固定为「有键就发、没键就不发」：没有对应键的音不发声，不改音高。
+/// 功能键总开关关掉时按「没有修饰键」处理。
 ///
 /// 时序规则沿用 <see cref="InputTiming"/> 的物理毫秒：
 /// 修饰键比音键早 ModLeadMs；每次按下至少跨过一个帧点（否则目标程序按帧采样时读不到）；
@@ -156,7 +158,8 @@ public sealed class LivePlayback : IDisposable
 
     /// <summary>
     /// 音高 → 乐器动作。音高先按 baseOctave 与方案基准八度的差整体移八度，
-    /// 再交给 <see cref="KeymapProfile.TryKeyOfPitch"/> 查表（含音域、超界与缺音策略）。
+    /// 再交给 <see cref="KeymapProfile.TryKeyOfPitch"/> 查表（含音域）。
+    /// 规则固定为「有键就发、没键就不发」：没有对应的键不发声，不改音高。
     /// </summary>
     public static LiveMapping Map(int pitch, int baseOctave, KeymapProfile profile)
     {
@@ -169,10 +172,10 @@ public sealed class LivePlayback : IDisposable
         if (!profile.InRange(shifted))
         {
             return new LiveMapping(false, "", false, false, false,
-                $"超出音域（本档可演奏 {Music.NoteName(lo)} ~ {Music.NoteName(hi)}，可用基准八度或移调调整）");
+                $"超出音域（本档可演奏 {Music.SolfegeRange(lo, hi)}，可用基准八度或移调调整）");
         }
         return new LiveMapping(false, "", false, false, false,
-            "键表里没有这个音（缺音策略：丢弃），可在方案里加键或改成「就近吸附」");
+            "键表里没有这个音（没有对应键的音直接跳过），可在方案里加一个键");
     }
 
     /// <summary>
@@ -190,6 +193,13 @@ public sealed class LivePlayback : IDisposable
         int shift = 12 * (baseOctave - profile.BaseOctave);
         return (lo + shift, hi + shift);
     }
+
+    /// <summary>
+    /// 方案里写的修饰键名，功能键总开关关掉或没绑时返回 null。
+    /// 调用方拿到 null 就等于「这个修饰键不存在」，不会往输出队列里排空键名。
+    /// </summary>
+    private static string? ModKeyOrNull(string? keyName, KeymapProfile profile)
+        => profile.ModifiersEnabled && !string.IsNullOrWhiteSpace(keyName) ? keyName : null;
 
     /// <summary>
     /// 从一组音高挑基准八度：先让"超出音域"的音最少，再让音域最贴合唱到的音
@@ -229,6 +239,14 @@ public sealed class LivePlayback : IDisposable
         double half = (hi - lo) / 2.0;
         double d = Math.Abs(pitch - center) / Math.Max(1.0, half);
         return d * d;
+    }
+
+    /// <summary>
+    /// 建立实例时接上设备断开事件：设备报错就停实时演奏并松键（IN-08）。
+    /// </summary>
+    public LivePlayback()
+    {
+        MidiInputService.DeviceLost += OnDeviceLost;
     }
 
     public void Start()
@@ -271,6 +289,7 @@ public sealed class LivePlayback : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        MidiInputService.DeviceLost -= OnDeviceLost;
         Stop();
         _wake.Dispose();
     }
@@ -294,10 +313,10 @@ public sealed class LivePlayback : IDisposable
         NoteObserved?.Invoke(map, pitch, velocity);
 
         if (octaveMoved)
-            Log?.Invoke($"[MIDI] 自动贴合音域：基准八度改为 {Music.NoteName(_baseOctave * 12)}");
+            Log?.Invoke($"[MIDI] 自动贴合音域：基准八度改为 {Music.SolfegeName(_baseOctave * 12)}");
         if (!map.Playable)
         {
-            Log?.Invoke($"[MIDI] {Music.NoteName(pitch)} 未发声：{map.Reason}");
+            Log?.Invoke($"[MIDI] {Music.SolfegeName(pitch)} 未发声：{map.Reason}");
             return;
         }
 
@@ -322,17 +341,19 @@ public sealed class LivePlayback : IDisposable
                 if (need > minDown) minDown = need;
             }
 
-            // 修饰键切换：老状态立刻松开，新状态提前 modLead 按下
+            // 修饰键切换：老状态立刻松开，新状态提前 modLead 按下。
+            // 功能键总开关（ModifiersEnabled）关掉时按「没有修饰键」处理：不按八度键，也不按升半音键。
             double modLead = Math.Max(Timing.ModLeadMs, Timing.FrameMs);
-            string? wantMod = map.Low ? profile.OctaveDown : map.High ? profile.OctaveUp : null;
-            if (string.IsNullOrEmpty(wantMod)) wantMod = null;
+            string? wantMod = map.Low ? ModKeyOrNull(profile.OctaveDown, profile)
+                            : map.High ? ModKeyOrNull(profile.OctaveUp, profile)
+                            : null;
             if (_modKey != wantMod)
             {
                 if (_modKey is { Length: > 0 } old) Enqueue(now, old, false);
                 if (wantMod is { Length: > 0 } neu) Enqueue(Math.Max(now, minDown - modLead), neu, true);
                 _modKey = wantMod;
             }
-            string? sharpKey = string.IsNullOrEmpty(profile.Sharp) ? null : profile.Sharp;
+            string? sharpKey = ModKeyOrNull(profile.Sharp, profile);
             if (_modSharp != map.Sharp && sharpKey != null)
             {
                 if (_modSharp) Enqueue(now, sharpKey, false);
@@ -349,7 +370,13 @@ public sealed class LivePlayback : IDisposable
                 MinUpAt = downAt + minUpMs
             };
             _sounding.Add(note);
-            if (_sounding.Count > MaxSounding) _sounding.RemoveAt(0);
+            // 超出同时发声上限：丢最老的那条记录前先排定它的抬起，否则它的 KeyUp 永远发不出去 → 卡键（IN-07）
+            if (_sounding.Count > MaxSounding)
+            {
+                var oldest = _sounding[0];
+                _sounding.RemoveAt(0);
+                if (!oldest.Released) ReleaseNote(oldest, now, retrigger: false);
+            }
             Enqueue(downAt, map.Key, true);
             _lastDownAt = downAt;
             _lastKey = map.Key;
@@ -371,18 +398,32 @@ public sealed class LivePlayback : IDisposable
         }
     }
 
-    /// <summary>设备被拔掉或出错：松开所有键。</summary>
+    /// <summary>设备被拔掉或出错：松开所有键。设备线程与界面线程都能调用，加锁串行（IN-08）。</summary>
     public void ReleaseAll()
     {
         double now = NowMs();
         lock (_gate)
         {
             foreach (var s in _sounding.Where(x => !x.Released).ToList()) ReleaseNote(s, now, retrigger: false);
-            string? sharpKey = string.IsNullOrEmpty(Keymap.Sharp) ? null : Keymap.Sharp;
+            string? sharpKey = ModKeyOrNull(Keymap.Sharp, Keymap);
             if (_modSharp && sharpKey != null) { Enqueue(now, sharpKey, false); _modSharp = false; }
             if (_modKey is { Length: > 0 } m) { Enqueue(now, m, false); _modKey = null; }
             _wake.Release();
         }
+        // 线程已经退出时队列没人消费，这里直接补一次物理释放（两次 KeyUp 对目标程序无害）
+        if (!_running) InputSender.ReleaseEverything();
+    }
+
+    /// <summary>
+    /// 设备断开 / 报错时由 <see cref="MidiInputService.DeviceLost"/> 回调触发：
+    /// 停止实时演奏并松开所有键，否则设备最后按住的键会卡在目标程序里（IN-08）。
+    /// 只停本引擎，界面开关与日志由界面层自己处理。
+    /// </summary>
+    private void OnDeviceLost()
+    {
+        if (!_running) return;
+        Log?.Invoke("[MIDI] 设备断开或异常：已停止实时演奏并松开所有键。");
+        Stop();
     }
 
     /// <summary>
@@ -415,12 +456,38 @@ public sealed class LivePlayback : IDisposable
     private void Enqueue(double due, string key, bool down)
     {
         if (string.IsNullOrEmpty(key)) return;
-        if (_queue.Count >= MaxQueue) _queue.RemoveAt(0);
+        // 线程不在跑时只依赖 ReleaseAll 的直接释放，不再往队列里堆（队列没人消费）
+        if (!_running) return;
+        if (_queue.Count >= MaxQueue)
+        {
+            // 队列满时优先丢「按下」事件：丢 KeyUp 会把目标程序里的键留在按下状态（IN-07 / IN-08）。
+            int drop = _queue.FindIndex(e => e.Down);
+            if (drop >= 0)
+            {
+                _queue.RemoveAt(drop);
+            }
+            else
+            {
+                // A07：队列里全是抬起事件（都是必须发出去的 KeyUp），没有可丢的按下事件。
+                // 这时丢掉最老的一条 KeyUp 就会卡键 —— 那条 KeyUp 再也补不回来。
+                // 所以改为丢弃本次新事件；只有「按下」可以丢，「抬起」一律插进队列（队列因此不会超过上限）。
+                if (down)
+                {
+                    DroppedDown++;
+                    if (DroppedDown == 1 || DroppedDown % 100 == 0)
+                        Log?.Invoke($"[MIDI] 输出队列积压，已丢弃 {DroppedDown} 个按下事件（抬起事件不丢，不会卡键）");
+                }
+                return;
+            }
+        }
         var ev = new Pending { Due = due, Key = key, Down = down };
         int i = _queue.Count;
         while (i > 0 && _queue[i - 1].Due > due) i--;
         _queue.Insert(i, ev);
     }
+
+    /// <summary>队列满且队列里没有可丢的按下事件时，被丢弃的按下事件数（A07 诊断）。</summary>
+    public int DroppedDown { get; private set; }
 
     // ================= 自动贴合音域 =================
 

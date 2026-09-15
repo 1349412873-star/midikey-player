@@ -1,5 +1,6 @@
 using Melanchall.DryWetMidi.Core;
 using Melanchall.DryWetMidi.Multimedia;
+using MidiKeyPlayer.Persist;
 
 namespace MidiKeyPlayer.Midi;
 
@@ -17,6 +18,11 @@ public static class MidiInputService
     public static event Action<int, int, bool>? NoteEvent;
     /// <summary>设备被拔掉、启动失败等异常的说明。</summary>
     public static event Action<string>? Error;
+    /// <summary>
+    /// 设备中途断开或报错（不是启动失败）：引擎收到后要松开所有键并停实时演奏（IN-08）。
+    /// 在设备线程上触发，订阅方必须自己保证线程安全。
+    /// </summary>
+    public static event Action? DeviceLost;
 
     public static bool IsWindows => OperatingSystem.IsWindows();
     public static string CurrentDeviceName => _deviceName;
@@ -40,7 +46,7 @@ public static class MidiInputService
             return false;
         }
 
-        InputDevice device;
+        InputDevice? device = null;
         try
         {
             device = InputDevice.GetByName(deviceName);
@@ -58,6 +64,9 @@ public static class MidiInputService
         catch (Exception ex)
         {
             Error?.Invoke($"打开 MIDI 设备「{deviceName}」失败：{ex.Message}");
+            // A09：走到这里时可能已经订阅了事件、甚至已经开了监听。不清理就泄漏设备与订阅，
+            // 下次 Start 会重复挂一份回调。统一走 Stop 的清理路径。
+            CleanUpAfterFailedStart(device);
             return false;
         }
 
@@ -87,7 +96,32 @@ public static class MidiInputService
             if (device.IsListeningForEvents) device.StopEventsListening();
             device.Dispose();
         }
-        catch { /* 设备已经拔掉时释放会抛异常，忽略 */ }
+        catch (Exception ex)
+        {
+            // 设备已经拔掉时释放会抛异常：不影响使用，但写一条日志便于排查（A09）
+            LogFile.Append($"[MIDI] 释放设备失败（已忽略）：{ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 启动失败后的清理：退订事件、停监听、释放设备（A09）。
+    /// 启动失败路径可能已经订阅了事件甚至开了监听，不清理就会泄漏设备与订阅。
+    /// 复用 <see cref="Stop"/> 没取到锁时的同一套动作。
+    /// </summary>
+    private static void CleanUpAfterFailedStart(InputDevice? device)
+    {
+        if (device == null) return;
+        try
+        {
+            device.EventReceived -= OnEventReceived;
+            device.ErrorOccurred -= OnDeviceError;
+            if (device.IsListeningForEvents) device.StopEventsListening();
+            device.Dispose();
+        }
+        catch (Exception ex)
+        {
+            LogFile.Append($"[MIDI] 启动失败后清理设备出错（已忽略）：{ex.Message}");
+        }
     }
 
     /// <summary>系统里的 MIDI 输入设备名列表。没有设备时返回空列表。</summary>
@@ -132,5 +166,7 @@ public static class MidiInputService
     private static void OnDeviceError(object? sender, ErrorOccurredEventArgs e)
     {
         Error?.Invoke($"MIDI 设备异常：{e.Exception?.Message ?? "未知错误"}");
+        // 只在设备是当前监听设备时算"断开"，避免已停用的旧设备回调误伤正在演奏的设备
+        if (IsListening) DeviceLost?.Invoke();
     }
 }

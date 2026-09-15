@@ -9,6 +9,8 @@ namespace MidiKeyPlayer.Engine;
 /// 把演奏事件表导出成外部工具能用的按键脚本。
 /// 与「实际演奏」共用同一套调度（<see cref="PlaybackEngine.BuildSchedulePreview"/>），导出结果与播放时发出的按键完全一致。
 /// 按键名按当前键位方案（<see cref="KeymapProfile.Current"/>）来，键表换了导出的键名跟着换。
+/// 传进来的音符已经映射过：没有对应键的音在 <see cref="NoteMapper"/> 里就被跳过了，
+/// 这里只按方案里的修饰键开关决定要不要写八度键与升半音键，不做任何改音高的处理。
 /// 支持 LogitechGHub（罗技 G HUB 的 Lua）与 KeystrokeCsv（通用 CSV 时刻/动作/按键）。
 /// 雷蛇 Synapse 宏是私有格式、无官方规范，硬编很容易导入失败，故不提供一键导入，建议用 CSV 或宏录制。
 /// </summary>

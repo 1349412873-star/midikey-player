@@ -18,6 +18,7 @@ public static class GlobalHotkeys
     private static volatile bool _running;
     private static readonly Dictionary<int, long> _lastDownTick = new();
     private static uint _winThreadId;
+    private static readonly ManualResetEventSlim _ready = new(false);   // 钩子线程报告"线程 id 已就绪"
 
     public static bool IsAvailable => OperatingSystem.IsWindows();
     public static bool Running => _running;
@@ -42,19 +43,39 @@ public static class GlobalHotkeys
     public static bool Start()
     {
         if (_running || !IsAvailable) return _running;
-        _running = true;
-        _thread = new Thread(Worker) { IsBackground = true, Name = "GlobalHotkeys" };
-        _thread.Start();
-        return true;
+        lock (_sync)
+        {
+            if (_running) return true;
+            _ready.Reset();
+            _running = true;
+            _thread = new Thread(Worker) { IsBackground = true, Name = "GlobalHotkeys" };
+            _thread.Start();
+            // A08：阻塞等线程把 _winThreadId 写好（或注册失败）。否则 Stop() 可能在 id 写入前执行：
+            // 那样发不出 WM_QUIT，_thread 又被置 null，钩子线程与低级键盘钩子终身泄漏。
+            _ready.Wait(500);
+            return _running;
+        }
     }
 
     public static void Stop()
     {
         _running = false;
         // 唤醒阻塞在 GetMessage 的钩子线程
-        if (_winThreadId != 0)
-            PostThreadMessageW(_winThreadId, WM_QUIT, IntPtr.Zero, IntPtr.Zero);
-        _thread = null;
+        uint tid = _winThreadId;
+        if (tid != 0)
+            PostThreadMessageW(tid, WM_QUIT, IntPtr.Zero, IntPtr.Zero);
+
+        // A16：等工作线程真正退出再放掉引用，否则紧接着的 Start() 会再建一个线程与第二个钩子
+        Thread? t;
+        lock (_sync)
+        {
+            t = _thread;
+            _thread = null;
+        }
+        if (t != null && t.IsAlive && !ReferenceEquals(t, Thread.CurrentThread))
+            t.Join(300);
+
+        Interlocked.Exchange(ref _winThreadId, 0u);   // A08：复位，避免下次 Stop 对着已经没了的线程 id 发消息
     }
 
     // ================= 事件分发（工作线程） =================
@@ -138,6 +159,11 @@ public static class GlobalHotkeys
     {
         try
         {
+            // A08：先写线程 id 再注册钩子。这样 Start() 的 _ready.Wait 返回后 id 一定可用，
+            // Stop() 一定能发出 WM_QUIT（注册失败时也能让消息循环立刻退出）。
+            _winThreadId = (uint)Environment.CurrentManagedThreadId;
+            _ready.Set();
+
             using var cur = Process.GetCurrentProcess();
             IntPtr mod = cur.MainModule is { } m ? GetModuleHandleW(m.ModuleName) : IntPtr.Zero;
             _winHook = SetWindowsHookExW(WH_KEYBOARD_LL, WinProc, mod, 0);
@@ -148,7 +174,6 @@ public static class GlobalHotkeys
                 return;
             }
 
-            _winThreadId = (uint)Environment.CurrentManagedThreadId; // Stop() 靠这个 id 唤醒消息循环
             Status?.Invoke("全局热键已启用（目标程序中直接生效）");
 
             while (_running && GetMessageW(out _, IntPtr.Zero, 0, 0) > 0)
@@ -167,6 +192,13 @@ public static class GlobalHotkeys
         finally
         {
             _running = false;
+            if (_winHook != IntPtr.Zero)   // 异常路径也要拆钩子，否则钩子留在系统里
+            {
+                UnhookWindowsHookEx(_winHook);
+                _winHook = IntPtr.Zero;
+            }
+            _winThreadId = 0;
+            _ready.Set();   // 注册前就抛异常时也要放行 Start()
         }
     }
 }

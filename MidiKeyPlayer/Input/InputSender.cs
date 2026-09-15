@@ -98,6 +98,21 @@ public static class InputSender
 
     public static bool IsSupported => OperatingSystem.IsWindows();
 
+    // ---------------------------------------------------------------- 按下记账（A04）
+
+    // 本程序真正按下过的键/鼠标键。ReleaseEverything 只抬这一份记录，绝不碰用户物理按住的键。
+    private static readonly object HeldGate = new();
+    private static readonly HashSet<string> HeldKeys = new(StringComparer.Ordinal);
+    private static readonly HashSet<MouseButton> HeldButtons = new();
+
+    /// <summary>记账用的规范键名：鼠标键与命名键大小写敏感，单字符键统一成大写（"z" 与 "Z" 是同一个键）。</summary>
+    private static string NormKey(string? keyName)
+    {
+        string name = keyName ?? "";
+        if (name.Length == 1) return char.ToUpperInvariant(name[0]).ToString();
+        return name;
+    }
+
     // ---------------------------------------------------------------- 键名 → 虚拟键码
 
     /// <summary>标点键的虚拟键码（US 布局，与扫描码方式配套）。</summary>
@@ -227,8 +242,29 @@ public static class InputSender
     private static void SendKeyByName(string? keyName, bool down)
     {
         if (!OperatingSystem.IsWindows()) return;
-        if (TryMouseButton(keyName, out var button)) { SendMouse(button, down); return; }
-        if (!TryVkCode(keyName, out ushort vk)) return;
+
+        // 鼠标键：记账走 HeldButtons
+        if (TryMouseButton(keyName, out var button))
+        {
+            bool changed;
+            lock (HeldGate) changed = down ? HeldButtons.Add(button) : HeldButtons.Remove(button);
+            if (!changed) return;
+            SendMouse(button, down);
+            return;
+        }
+
+        // 记账（A04）：只记不在同一状态的键，重复调用不发也不重复记
+        string norm = NormKey(keyName);
+        bool changedKey;
+        lock (HeldGate) changedKey = down ? HeldKeys.Add(norm) : HeldKeys.Remove(norm);
+        if (!changedKey) return;
+
+        if (!TryVkCode(keyName, out ushort vk))
+        {
+            // 认不出的键名：回滚记账，避免留一条永远不会被释放的记录
+            lock (HeldGate) { if (down) HeldKeys.Remove(norm); else HeldKeys.Add(norm); }
+            return;
+        }
         SendKeyVk(down, vk, ExtendedVk.Contains(vk));
     }
 
@@ -249,27 +285,24 @@ public static class InputSender
     public static void MouseUp(MouseButton b) => SendMouse(b, false);
 
     /// <summary>
-    /// 把所有键/鼠标键抬起，用于停止/暂停时清理状态。
-    /// 遍历当前键位方案声明的全部键（含三个功能键），再补发一次旧默认键位与鼠标键兜底。
+    /// 只把本程序真正按下过的键/鼠标键抬起，用于停止/暂停时清理状态（A04）。
+    /// 不再遍历整张方案的键位表，也不补发硬编码的兜底键：用户自己物理按住的键不归本程序管，
+    /// 抬掉它们会让用户正在弹的音或正在用的修饰键中断。
+    /// 记账在 <see cref="KeyDown(string?)"/> / <see cref="KeyUp(string?)"/> 里完成，只记状态真正变化的键。
     /// </summary>
     public static void ReleaseEverything()
     {
         if (!OperatingSystem.IsWindows()) return;
 
-        var profile = KeymapProfile.Current;
-        foreach (var k in profile.Keys)
+        List<string> keys;
+        List<MouseButton> buttons;
+        lock (HeldGate)
         {
-            if (k == null || string.IsNullOrEmpty(k.Key)) continue;
-            KeyUp(k.Key);
+            if (HeldKeys.Count == 0 && HeldButtons.Count == 0) return;
+            keys = new List<string>(HeldKeys);
+            buttons = new List<MouseButton>(HeldButtons);
         }
-        KeyUp(profile.OctaveUp);
-        KeyUp(profile.OctaveDown);
-        KeyUp(profile.Sharp);
-
-        // 兜底：方案换过之后，上一轮按下的旧键也要松开
-        foreach (char c in "ZXCVBNM,") KeyUp(c);
-        MouseUp(MouseButton.Left);
-        MouseUp(MouseButton.Right);
-        MouseUp(MouseButton.Middle);
+        foreach (var key in keys) KeyUp(key);
+        foreach (var b in buttons) MouseUp(b);
     }
 }

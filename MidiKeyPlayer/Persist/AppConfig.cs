@@ -18,8 +18,26 @@ public sealed class ProfileSettings
 /// <summary>用户设置：退出后记住，下次启动自动恢复。</summary>
 public sealed class AppConfig
 {
-    public int Speed { get; set; } = 100;          // %
-    public int Transpose { get; set; } = 0;        // 半音
+    // 速度 / 移调的合法区间：界面滑块（10%–400%、±24）、引擎与实时演奏都用这一套口径（FN-02 / VR-10）。
+    public const int MinSpeedPercent = 10;
+    public const int MaxSpeedPercent = 400;
+    public const int MaxTransposeSemitones = 24;
+
+    private int _speed = 100;
+    private int _transpose;
+
+    public int Speed          // %
+    {
+        get => _speed;
+        set => _speed = Math.Clamp(value, MinSpeedPercent, MaxSpeedPercent);
+    }
+
+    public int Transpose      // 半音
+    {
+        get => _transpose;
+        set => _transpose = Math.Clamp(value, -MaxTransposeSemitones, MaxTransposeSemitones);
+    }
+
     public int CountdownIndex { get; set; } = 1;   // 0秒/3/5/10
     public int ControlHotkeyIndex { get; set; } = 6; // 统一控制键（默认 F6：开始/暂停/继续）
     public int RewindHotkeyIndex { get; set; } = 5;  // 后退热键（默认 F5）
@@ -84,9 +102,29 @@ public sealed class AppConfig
     public void RememberProfile(string? name, int speed, int transpose, int timingIndex)
     {
         var s = SettingsFor(name);
-        s.Speed = Math.Clamp(speed, 10, 500);
-        s.Transpose = Math.Clamp(transpose, -24, 24);
+        // 与界面滑块、引擎同口径（FN-02 / VR-10）：速度 10%–400%，移调 ±24
+        s.Speed = Math.Clamp(speed, MinSpeedPercent, MaxSpeedPercent);
+        s.Transpose = Math.Clamp(transpose, -MaxTransposeSemitones, MaxTransposeSemitones);
         s.TimingIndex = Math.Clamp(timingIndex, 0, 2);
+    }
+
+    /// <summary>
+    /// 把读盘得到的值夹回合法区间：老设置文件里可能存着 500% 或 ±30。
+    /// 写盘走 <see cref="Speed"/> / <see cref="Transpose"/> 的属性 setter，与这里同一套口径（FN-02 / VR-10）。
+    /// </summary>
+    public void Normalize()
+    {
+        Speed = Speed;
+        Transpose = Transpose;
+        if (PerProfile == null) return;
+        foreach (var s in PerProfile.Values)
+        {
+            if (s == null) continue;
+            s.Speed = Math.Clamp(s.Speed, MinSpeedPercent, MaxSpeedPercent);
+            s.Transpose = Math.Clamp(s.Transpose, -MaxTransposeSemitones, MaxTransposeSemitones);
+            // D11：每方案的输入档位也要夹。漏了这一行，脏设置文件里的 99 会一路传到 InputTiming.FromIndex
+            s.TimingIndex = Math.Clamp(s.TimingIndex, 0, 2);
+        }
     }
 
     // ================= 读盘 / 写盘 =================
@@ -104,6 +142,7 @@ public sealed class AppConfig
                     // 老用户升级：设置文件已存在就不算“首次”，不弹快速上手
                     cfg.FirstRunDone = true;
                     cfg.PerProfile ??= new Dictionary<string, ProfileSettings>();
+                    cfg.Normalize();   // 读盘与写盘同口径
                     return cfg;
                 }
             }
@@ -118,6 +157,7 @@ public sealed class AppConfig
             {
                 migrated.FirstRunDone = true;
                 migrated.PerProfile ??= new Dictionary<string, ProfileSettings>();
+                migrated.Normalize();   // 旧设置文件可能是 500% / ±30，按新口径夹回
                 migrated.Save();   // 只迁移一次：写进新目录后，下次就走新目录
                 return migrated;
             }
@@ -161,10 +201,14 @@ public sealed class AppConfig
 /// <summary>
 /// 源生成的 JSON 上下文。设置读写必须走它，不能用 JsonSerializer 的反射重载。
 ///
-/// 发布开了裁剪（PublishTrimmed + TrimMode=partial）。反射式序列化依赖的元数据会被裁掉，
+/// 当前发布**没有开裁剪**（csproj 里没有 PublishTrimmed）：不开的理由与设置无关，
+/// 是 Avalonia 的 XAML 绑定与 DryWetMidi 依赖反射，裁剪的风险大于体积收益。
+/// 设置这条链上则已经彻底不用反射：源生成在编译期产出读写代码。
+///
+/// 这条链原来踩过坑，所以固定成源生成：反射式序列化依赖的元数据一旦被裁掉，
 /// 运行时抛异常。而 Save / Load 原先都静默吞掉异常 —— 结果是设置从未写盘，
 /// 表现为「每次启动都弹快速上手」，而且速度、移调、热键全都不记忆。
-/// 源生成在编译期产出读写代码，不依赖反射，裁剪下也正常。
+/// 现在即便将来重新开裁剪，设置也不会跟着坏。
 ///
 /// 键位方案（<see cref="KeymapProfile"/>）也一起登记，方案文件与设置走同一套源生成代码。
 /// </summary>

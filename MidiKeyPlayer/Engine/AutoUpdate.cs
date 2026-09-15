@@ -20,7 +20,26 @@ public static class AutoUpdate
     /// <summary>最新 Release 页面（用于跳转下载）。</summary>
     public static string ReleasesUrl => $"https://github.com/{Owner}/{Repo}/releases";
 
-    /// <summary>当前程序版本（如 1.0.7，第三段必须取 Build，第四段是内部版本号）。</summary>
+    /// <summary>允许跳转的地址前缀。只有本仓库的页面才交给系统浏览器打开。</summary>
+    private static readonly string[] AllowedUrlPrefixes =
+    {
+        $"https://github.com/{Owner}/{Repo}/",
+    };
+
+    /// <summary>地址是否属于本仓库。不在白名单就退回 <see cref="ReleasesUrl"/>，不交给 shell。</summary>
+    private static bool IsAllowedUrl(string url)
+    {
+        if (string.IsNullOrEmpty(url)) return false;
+        foreach (string prefix in AllowedUrlPrefixes)
+            if (url.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// 当前程序版本（如 1.0.7，第三段必须取 Build，第四段是内部版本号）。
+    /// 版本号只支持三段数字（<c>x.y.z</c>）。预发布后缀（<c>1.0.0-rc.1</c> 里的 <c>-rc.1</c>）
+    /// 不参与比较，会被丢弃，所以它等于 <c>1.0.0</c>。写 tag 时请只用 <c>vX.Y.Z</c>。
+    /// </summary>
     public static string CurrentVersion
     {
         get
@@ -69,6 +88,11 @@ public static class AutoUpdate
             string name = root.TryGetProperty("name", out var nm) ? (nm.GetString() ?? "") : "";
             string html = root.TryGetProperty("html_url", out var h) ? (h.GetString() ?? "") : "";
 
+            // 地址白名单：接口返回的 html_url 只认本仓库前缀，其它一律退回固定的 Releases 页，
+            // 免得将来换了数据源以后把 file:/ms-*: 之类的地址直接交给 shell。
+            if (html.Length > 0 && !IsAllowedUrl(html))
+                Persist.LogFile.Append($"[更新] 接口返回的地址不在白名单，改用 Releases 页：{html}");
+
             bool newer = IsNewer(tag, CurrentVersion);
             return new Result
             {
@@ -76,7 +100,7 @@ public static class AutoUpdate
                 LatestTag = tag.TrimStart('v', 'V'),
                 CurrentTag = CurrentVersion,
                 ReleaseName = name,
-                ReleaseUrl = string.IsNullOrEmpty(html) ? ReleasesUrl : html,
+                ReleaseUrl = IsAllowedUrl(html) ? html : ReleasesUrl,
                 Skipped = newer && !string.IsNullOrEmpty(skippedTag) &&
                           string.Equals(tag.TrimStart('v', 'V'), skippedTag.TrimStart('v', 'V'),
                                         StringComparison.OrdinalIgnoreCase)
@@ -105,8 +129,16 @@ public static class AutoUpdate
     {
         var parts = (v ?? "").Trim().TrimStart('v', 'V').Split('.', '-', '+');
         var outv = new int[3];
-        for (int i = 0; i < 3 && i < parts.Length; i++)
-            int.TryParse(parts[i], out outv[i]);
+        for (int i = 0; i < parts.Length; i++)
+        {
+            // 只比较前三段。预发布段（1.0.0-rc.1 里的 rc）被丢掉，所以它等于 1.0.0。
+            if (!int.TryParse(parts[i], out int n))
+            {
+                Persist.LogFile.Append($"[更新] 版本号「{v}」里的「{parts[i]}」不是数字，这一段按 0 算。");
+                n = 0;                                  // 预发布段不参与比较
+            }
+            if (i < 3) outv[i] = n;
+        }
         return outv;
     }
 
@@ -117,9 +149,10 @@ public static class AutoUpdate
         {
             Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
         }
-        catch
+        catch (Exception ex)
         {
-            // 打不开就算了，界面上也会把链接文字显示出来供手动复制
+            // 打不开就算了，界面上也会把链接文字显示出来供手动复制；失败原因写日志
+            Persist.LogFile.Append($"[更新] 打开链接失败（{url}）：{ex.Message}");
         }
     }
 }

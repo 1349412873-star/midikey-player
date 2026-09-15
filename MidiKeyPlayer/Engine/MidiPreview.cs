@@ -7,7 +7,7 @@ namespace MidiKeyPlayer.Engine;
 /// 内置试听：借用 Windows 自带的 MIDI 合成器（winmm 的 MIDI Out，默认设备通常是
 /// "Microsoft GS Wavetable Synth"）发声，方便改谱时边改边听。
 ///
-/// 为什么不用第三方音频库：本项目是自包含单文件发布 + 裁剪，引入 NAudio 之类会明显
+/// 为什么不用第三方音频库：本项目是自包含单文件发布，引入 NAudio 之类会明显
 /// 增加体积，而 winmm 是系统自带的，P/Invoke 即可 —— 与项目已有的 SendInput /
 /// user32 调用风格一致，零新增依赖。
 ///

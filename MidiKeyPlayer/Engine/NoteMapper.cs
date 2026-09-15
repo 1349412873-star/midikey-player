@@ -17,21 +17,21 @@ public sealed class MappedNote
     /// <summary>方案里写的键名（"Z" / "," / "PageUp" / "MouseLeft"）。</summary>
     public string KeyName { get; init; } = "";
 
-    /// <summary>true → 需要按住升半音键。</summary>
+    /// <summary>true → 需要按住升半音键。功能键关掉或键表里没有升半音键时恒为 false。</summary>
     public bool Sharp { get; init; }
 
     /// <summary>八度档位：相对方案基准音所在八度的偏移（-1 / 0 / +1）。</summary>
     public int OctaveOffset { get; init; }
 
-    /// <summary>实际发声音高：折八度或就近吸附后可能与 <see cref="Pitch"/> 不同。</summary>
+    /// <summary>实际发声音高。规则固定为「有键就发、没键就不发」，命中时与 <see cref="Pitch"/> 相同。</summary>
     public int SoundingPitch { get; init; }
 
-    /// <summary>false → 不发声（超界丢音、缺音丢弃、移调越界、键表为空）。</summary>
+    /// <summary>false → 不发声（超界丢音、键表里没有这个音、移调越界、键表为空）。</summary>
     public bool InRange { get; init; }
 
     public string SkipReason { get; init; } = "";
 
-    /// <summary>发声了，但音高被折八度/吸附挪过。</summary>
+    /// <summary>发声了，但音高被挪过。现在只有「原样发声」一条路径，恒为 false。</summary>
     public bool Shifted => InRange && SoundingPitch != Pitch;
 }
 
@@ -46,14 +46,14 @@ public sealed class MappingResult
     public int InRangeCount => Notes.Count(n => n.InRange);
     public int SkipCount => Notes.Count(n => !n.InRange);
 
-    /// <summary>发声但音高被折八度或吸附挪过的音数。</summary>
+    /// <summary>发声但音高被挪过的音数。现在恒为 0（不再有改音高的路径）。</summary>
     public int ShiftedCount => Notes.Count(n => n.Shifted);
 }
 
 /// <summary>
-/// 把主旋律 MIDI 音高映射成乐器按键。键位与缺音行为全部读 <see cref="KeymapProfile.Current"/>：
-/// 能弹范围由键位推导（见 <see cref="KeymapProfile.ReachableExtent"/>），范围外的音固定不弹，
-/// 范围内的半音按 <see cref="KeymapProfile.MissingNote"/> 跳过或用高/低半音代替。
+/// 把主旋律 MIDI 音高映射成乐器按键。键位与音域全部读 <see cref="KeymapProfile.Current"/>：
+/// 能弹范围由键位推导（见 <see cref="KeymapProfile.ReachableExtent"/>），范围外的音固定不弹；
+/// 范围内的音只认精确命中 —— 有键就发、没键就不发，不按任何策略改音高。
 /// </summary>
 public static class NoteMapper
 {
@@ -161,14 +161,13 @@ public static class NoteMapper
             {
                 // 超出能弹范围：固定不弹，没有折八度开关
                 result.Notes.Add(Skipped(p, n,
-                    $"超出能弹范围（{Music.NoteName(Math.Min(lo, hi))} ~ {Music.NoteName(Math.Max(lo, hi))}）"));
+                    $"超出能弹范围（{Music.SolfegeRange(lo, hi)}）"));
                 continue;
             }
 
-            if (!profile.TryKeyOfPitch(want, out string keyName, out int octaveOffset, out bool sharp,
-                                      out int sounding))
+            if (!profile.TryKeyOfPitch(want, out string keyName, out int octaveOffset, out bool sharp))
             {
-                result.Notes.Add(Skipped(p, n, $"这个音没有对应的键（半音处理：{MissingNoteText(profile)}）"));
+                result.Notes.Add(Skipped(p, n, "键表里没有这个音（没有对应键的音直接跳过）"));
                 continue;
             }
 
@@ -181,7 +180,7 @@ public static class NoteMapper
                 KeyName = keyName,
                 Sharp = sharp,
                 OctaveOffset = octaveOffset,
-                SoundingPitch = sounding + shift,
+                SoundingPitch = p,
                 InRange = true,
             });
         }
@@ -331,21 +330,15 @@ public static class NoteMapper
         // 只显示方案里的键名：内部的哨兵字符绝不给人看
         string keyShow = string.IsNullOrEmpty(n.KeyName) ? "（无按键）"
             : (n.KeyName == "," ? "，" : n.KeyName);
-        string sharpName = string.IsNullOrWhiteSpace(profile.Sharp) ? "升半音键" : profile.Sharp!;
+        string sharpName = string.IsNullOrWhiteSpace(profile.Sharp) || !profile.ModifiersEnabled
+            ? "升半音键" : profile.Sharp!;
         string sharp = n.Sharp ? $"{sharpName}+升半音 " : "";
-        string fold = n.Shifted ? $"（改弹 {Music.NoteName(n.SoundingPitch)}）" : "";
+        string fold = n.Shifted ? $"（改弹 {Music.SolfegeName(n.SoundingPitch)}）" : "";
         string time = withTime ? $"{n.Start:F2}s " : "";
-        return $"{time}{Music.NoteName(n.Pitch)}({Music.DegreeName(n.Pitch)}){fold} → 按[{keyShow}] {sharp}{slot}";
+        return $"{time}{Music.SolfegeName(n.Pitch)}{fold} → 按[{keyShow}] {sharp}{slot}";
     }
 
-    /// <summary>半音处理选项的中文名，用在跳过原因里。</summary>
-    private static string MissingNoteText(KeymapProfile profile) => profile.MissingNote switch
-    {
-        MissingNoteMode.Skip => "跳过这个音",
-        MissingNoteMode.Up => "用高半音代替",
-        _ => "用低半音代替",
-    };
-
+    /// <summary>八度档位的中文名，给跳过原因与音高描述用。</summary>
     private static string OctaveLabel(string? key, string fallback)
         => string.IsNullOrWhiteSpace(key) ? fallback : $"{fallback}(按{key})";
 }

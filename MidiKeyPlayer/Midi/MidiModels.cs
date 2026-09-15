@@ -32,9 +32,10 @@ public sealed class MidiCandidate
     public int MinPitch => Notes.Count == 0 ? 0 : Notes.Min(n => n.Pitch);
     public int MaxPitch => Notes.Count == 0 ? 0 : Notes.Max(n => n.Pitch);
 
-    public string ChannelLabel => Channel == 9 ? $"{Channel + 1}(打击乐)" : (Channel + 1).ToString();
+    public string ChannelLabel => Channel == 9 ? $"{Channel + 1}(鼓)" : (Channel + 1).ToString();
+    /// <summary>列表里的音域：简谱范围，例如 5.~2。不留空格，列表里省地方。</summary>
     public string RangeLabel => Notes.Count == 0 ? "-"
-        : $"{Music.NoteName(MinPitch)}~{Music.NoteName(MaxPitch)}";
+        : Music.SolfegeRange(MinPitch, MaxPitch);
     public string TrackLabel => (TrackIndex + 1).ToString();
 }
 
@@ -63,8 +64,46 @@ public static class Music
     /// <summary>标准音名，如 C4 / F#5。</summary>
     public static string NoteName(int pitch) => $"{Names[Mod(pitch, 12)]}{pitch / 12 - 1}";
 
-    /// <summary>简谱记号（含升降号），音高模 12。</summary>
+    /// <summary>简谱记号（含升降号），音高模 12。不带八度点，内部用途保留。</summary>
     public static string DegreeName(int pitch) => JianPu[Mod(pitch, 12)];
+
+    // 八度点用「间距」字符，不用组合字符：界面的字体（Microsoft YaHei UI 等）没有
+    // U+0307 / U+0323 的字形，组合点会渲染成豆腐块。U+02D9 是上点，点号是下点，两者都必定有字形。
+    private const string DotUp = "\u02D9";     // ˙ 上点
+    private const string DotDown = ".";        // . 下点
+
+    /// <summary>
+    /// 面向用户的简谱音高：数字 1..7 加升降号，八度用数字后面的点表示，上点是高八度，下点是低八度。
+    /// 基准是 60（中音 do = 1，不带点）；往上每十二个半音加一个上点，往下加下点，最多两个。
+    /// 例如 1 / 1˙ / 1˙˙ / 1. / #4。
+    /// </summary>
+    public static string SolfegeName(int pitch)
+    {
+        int octave = (int)Math.Floor((pitch - 60) / 12.0);
+        if (octave == 0) return DegreeName(pitch);
+        string mark = octave > 0 ? DotUp : DotDown;
+        int count = Math.Min(Math.Abs(octave), 2);   // 最多两个点：低音 / 高音 / 高高音
+        var sb = new System.Text.StringBuilder(DegreeName(pitch), DegreeName(pitch).Length + count);
+        for (int i = 0; i < count; i++) sb.Append(mark);
+        return sb.ToString();
+    }
+
+    /// <summary>简谱音域：低到高，例如 5.~2。传反了自动换过来。不留空格，列表里省地方。</summary>
+    public static string SolfegeRange(int lo, int hi)
+    {
+        if (lo > hi) (lo, hi) = (hi, lo);
+        return $"{SolfegeName(lo)}~{SolfegeName(hi)}";
+    }
+
+    /// <summary>0..127 全部简谱名，配表用。下标就是音高，省得每次现算。</summary>
+    public static readonly string[] SolfegeNames = BuildSolfegeNames();
+
+    private static string[] BuildSolfegeNames()
+    {
+        var list = new string[128];
+        for (int p = 0; p < 128; p++) list[p] = SolfegeName(p);
+        return list;
+    }
 
     public static int Mod(int a, int b) => ((a % b) + b) % b;
 }
