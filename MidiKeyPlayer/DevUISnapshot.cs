@@ -9,6 +9,23 @@ using MidiKeyPlayer.Midi;
 namespace MidiKeyPlayer;
 
 /// <summary>
+/// 界面快照 / 文件夹换歌回归的开关。设了任意一个 MIDIKEY_UI_SNAPSHOT* 变量就为 true。
+/// 用途：<see cref="Program"/> 里跳过单实例锁 —— 这些探针不演奏、不发按键，
+/// 允许与用户正在用的实例并存（与 PreviewProbeMode 同一个理由）。
+/// </summary>
+internal static class DevSnapshotMode
+{
+    internal static readonly bool On =
+        !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT"))
+        || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_KEYMAP"))
+        || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_MIDI"))
+        || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_MIX"))
+        || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_REPORT"))
+        || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_FOLDER"))
+        || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_FOLDER_REPORT"));
+}
+
+/// <summary>
 /// 【开发用，可删】无显示器时把界面渲染成 PNG 再退出。
 ///
 /// MIDIKEY_UI_SNAPSHOT=/path/main.png
@@ -34,8 +51,10 @@ public partial class MainWindow
         var midiPath = Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_MIDI");
         var mixMode = Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_MIX");
         var reportPath = Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_REPORT");
+        var folderProbe = Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_FOLDER");
         if (string.IsNullOrWhiteSpace(path) && string.IsNullOrWhiteSpace(keymapPath)
-            && string.IsNullOrWhiteSpace(midiPath) && string.IsNullOrWhiteSpace(reportPath)) return;
+            && string.IsNullOrWhiteSpace(midiPath) && string.IsNullOrWhiteSpace(reportPath)
+            && string.IsNullOrWhiteSpace(folderProbe)) return;
 
         window.Opened += (_, _) =>
         {
@@ -57,6 +76,14 @@ public partial class MainWindow
             if (string.Equals(mixMode, "all", StringComparison.OrdinalIgnoreCase))
             {
                 window.MixAllPlayableTracksForDev();
+            }
+
+            // 文件夹曲目卡换歌回归场景：这条链路自己收尾并退出，不跟快照计时器混在一起
+            if (!string.IsNullOrWhiteSpace(folderProbe))
+            {
+                RunFolderClickProbe(window, folderProbe!,
+                    Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_FOLDER_REPORT"));
+                return;
             }
             // 等布局就绪，900ms 是实测够用的值
             var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(900) };
@@ -105,6 +132,107 @@ public partial class MainWindow
             timer.Start();
         };
     }
+
+    /// <summary>
+    /// 【开发用】回归场景：在「文件夹曲目」卡里连续换歌三次，检查换过一首之后还能不能接着换。
+    ///
+    /// MIDIKEY_UI_SNAPSHOT_FOLDER=&lt;目录&gt;
+    /// MIDIKEY_UI_SNAPSHOT_FOLDER_REPORT=&lt;报告路径&gt;（不写就落 %TEMP%\midikey-folder-probe.txt）
+    ///
+    /// 退出码：0 = 三次都换成功；1 = 有一步没换过去，或列表塌了。
+    ///
+    /// 背景：用户报过「选了一首之后，别的就点不动了」。根因是换歌时
+    /// RefreshFolderUi 带着选中项清空 FolderList.Items，ListBox 的选择模型随后
+    /// 拿旧下标回查条目，抛 ArgumentOutOfRangeException；异常被 LoadMidiFile 接住只写日志，
+    /// 界面上留下的是曲目卡再也点不动。修复见 FolderList_SelectionChanged 的说明。
+    /// 这个场景就是那个 bug 的回归测试：连续换三首，每步都要换过去，且列表行数不塌。
+    /// </summary>
+    private static async void RunFolderClickProbe(MainWindow window, string dir, string? reportPath)
+    {
+        var sb = new System.Text.StringBuilder();
+        void Line(string s)
+        {
+            sb.AppendLine(s);
+            Console.WriteLine("[folder-probe] " + s);
+        }
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(reportPath))
+                reportPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "midikey-folder-probe.txt");
+
+            window.ScanMidiFolderForDev(dir);
+            Line($"目录：{dir}");
+            Line($"列表行数：{window.FolderList.Items.Count}（含子文件夹与占位行）");
+
+            // 只取 MIDI 文件行（子文件夹行单击不载入，要双击才进）
+            var fileRows = new List<ListBoxItem>();
+            foreach (var o in window.FolderList.Items)
+                if (o is ListBoxItem it && it.Tag is FolderRow row && !row.IsDir)
+                    fileRows.Add(it);
+
+            Line($"可点的 MIDI 行：{fileRows.Count} 首");
+            if (fileRows.Count < 2)
+            {
+                Line("文件少于 2 首，这个场景测不了。");
+                System.IO.File.WriteAllText(reportPath, sb.ToString());
+                window.DevCleanUpForExit();
+                Environment.Exit(2);
+            }
+
+            int initial = fileRows.Count;
+            int steps = Math.Min(3, initial);
+            int bad = 0;
+            int done = 0;
+            var wanted = new List<string>();
+            for (int i = 0; i < steps; i++) wanted.Add(((FolderRow)fileRows[i].Tag!).Path);
+
+            for (int step = 0; step < steps; step++)
+            {
+                string want = wanted[step];
+                var target = fileRows[step];
+                window.FolderList.SelectedItem = target;   // 等价于用户点这一行
+                await Task.Delay(900);
+                done++;
+
+                string actual = window.ParsedPathForDev;
+                bool switched = string.Equals(actual, want, StringComparison.OrdinalIgnoreCase);
+                if (!switched) bad++;
+
+                // 每一步之后重新取行对象：列表每次重建，旧对象已经不在 Items 里
+                fileRows = new List<ListBoxItem>();
+                foreach (var o in window.FolderList.Items)
+                    if (o is ListBoxItem it && it.Tag is FolderRow row && !row.IsDir)
+                        fileRows.Add(it);
+
+                bool alive = fileRows.Count == initial;      // 列表还能点：行数没塌
+                if (!alive) bad++;
+                Line($"第 {step + 1} 次：点「{Path.GetFileName(want)}」→ 实际「{Path.GetFileName(actual)}」"
+                     + $" {(switched ? "换过去了" : "没换过去")}；剩下可点 {fileRows.Count}/{initial} 首"
+                     + $" {(alive ? "" : "← 列表塌了")}");
+
+                if (!alive) break;
+            }
+
+            if (done < steps) { bad++; Line($"只跑到第 {done} 步就停了，剩下 {steps - done} 步没跑到。"); }
+            Line(bad == 0 ? "结果：全部通过" : $"结果：{bad} 处不对");
+            System.IO.File.WriteAllText(reportPath, sb.ToString());
+            window.DevCleanUpForExit();
+            Environment.Exit(bad == 0 ? 0 : 1);
+        }
+        catch (Exception ex)
+        {
+            Line("场景异常：" + ex);
+            try { System.IO.File.WriteAllText(reportPath!, sb.ToString()); } catch { }
+            Environment.Exit(1);
+        }
+    }
+
+    /// <summary>【开发用】按目录扫描并刷新曲目卡（回归场景用）。</summary>
+    internal void ScanMidiFolderForDev(string dir) => ScanMidiFolder(dir);
+
+    /// <summary>【开发用】当前已载入的文件路径。没载入就是空串。</summary>
+    internal string ParsedPathForDev => _parsed?.FilePath ?? "";
 
     /// <summary>
     /// 【开发用】把左侧所有候选（含打击乐轨）按列表顺序勾进合奏：第一个勾的 = 0 号声部，

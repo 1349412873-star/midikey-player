@@ -1315,6 +1315,10 @@ public partial class MainWindow : Window
         _folderSyncing = true;   // 下面改选中项会触发 SelectionChanged，那一次不是用户点击
         try
         {
+            // 先摘掉选中项，再清空列表。
+            // 带着选中项清 Items，ListBox 的选择模型会拿旧下标去回查已经不在的条目，
+            // 抛 ArgumentOutOfRangeException（用户报的「选了一首之后别的点不动」）。
+            FolderList.SelectedItem = null;
             FolderList.Items.Clear();
             int shown = Math.Min(total, FolderMenuMax);
             for (int i = 0; i < shown; i++)
@@ -1344,7 +1348,6 @@ public partial class MainWindow : Window
             TxtFolderEmpty.IsVisible = total == 0;
 
             // 载入过的那一首保持选中：换歌后高亮跟着走，用户一眼看到当前是哪首。
-            FolderList.SelectedItem = null;
             string current = _parsed?.FilePath ?? "";
             if (current.Length > 0)
             {
@@ -1408,14 +1411,25 @@ public partial class MainWindow : Window
         if (row.IsDir) return;                                             // 子文件夹：等双击
         // 抑制标记复位之后仍可能到达的重复选中事件：已经是当前这首就返回，别重复载入
         if (row.Path == _parsed?.FilePath) return;
-        _ = OpenFolderFileAsync(row.Path);
+
+        // 关键：不能在这个选择事件里立刻载入。载入会重建 FolderList 的条目，
+        // 而此刻 ListBox 自己的选择分发还没走完 —— 它随后还会按旧下标回查条目，
+        // 拿到的却是刚被清空的列表，于是抛 ArgumentOutOfRangeException。
+        // 异常被 LoadMidiFile 接住只写一行日志，界面上留下的是「曲目卡再也点不动」。
+        // 丢到下一轮 UI 队列：让这次选择事件先走完，再换歌、再重建列表。
+        string pending = row.Path;
+        Dispatcher.UIThread.Post(() => _ = OpenFolderFileAsync(pending));
     }
 
     /// <summary>双击子文件夹行：进入该目录（重新扫描并刷新卡片）。MIDI 行没有挂这个处理器，单击已经载入。</summary>
     private void FolderDirRow_DoubleTapped(object? sender, TappedEventArgs e)
     {
+        // 与单击换歌同一个理由：进目录也会重建列表，不能在这个指针事件里做。
         if (sender is ListBoxItem it && it.Tag is FolderRow row && row.IsDir)
-            EnterFolder(row.Path);
+        {
+            string pending = row.Path;
+            Dispatcher.UIThread.Post(() => EnterFolder(pending));
+        }
     }
 
     /// <summary>进入一个子文件夹：目录还在就重扫它；已经不在就重扫当前目录，把失效的那一行去掉。</summary>
@@ -1652,8 +1666,26 @@ public partial class MainWindow : Window
             }
             InsertLog($"载入失败：{path}");
             InsertLog($"  原因：{string.Join("  <-  ", parts)}（错误码 0x{ex.HResult:X8}）");
+            // 记位置：这类异常多数出在「载入之后的界面刷新」，只有原因看不出来是哪一行。
+            InsertLog($"  位置：{FirstStackFrames(ex, 4)}");
             return false;
         }
+    }
+
+    /// <summary>把异常调用栈的前几帧合成一行，供日志定位。没有栈就返回「（无）」。</summary>
+    internal static string FirstStackFrames(Exception ex, int count)
+    {
+        string? stack = ex.StackTrace;
+        if (string.IsNullOrWhiteSpace(stack)) return "（无）";
+        var frames = new List<string>();
+        foreach (string raw in stack.Split('\n'))
+        {
+            string line = raw.Trim();
+            if (line.Length == 0) continue;
+            frames.Add(line);
+            if (frames.Count >= count) break;
+        }
+        return frames.Count == 0 ? "（无）" : string.Join(" | ", frames);
     }
 
     /// <summary>换歌前停掉旧曲（松开按键、释放引擎）。</summary>

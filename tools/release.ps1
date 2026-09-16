@@ -227,6 +227,28 @@ function Invoke-Snapshot([string]$exe, [string]$tag) {
     return @{ Main = $main; Keymap = $keymap }
 }
 
+# 文件夹曲目卡换歌回归：连续点三首，每步都要换过去，列表行数不能塌。
+# 用户报过的「选了一首之后别的点不动」就是这条链路坏了，所以每次发版都跑。
+function Invoke-FolderProbe([string]$exe) {
+    $folder = Join-Path $RepoRoot '示例MIDI'
+    if (-not (Test-Path -LiteralPath $folder)) { throw "缺少回归素材目录：$folder" }
+    $report = Join-Path $env:TEMP 'midikey-release-folder-probe.txt'
+    Remove-Item $report -ErrorAction SilentlyContinue
+
+    $env:MIDIKEY_UI_SNAPSHOT_FOLDER = $folder
+    $env:MIDIKEY_UI_SNAPSHOT_FOLDER_REPORT = $report
+    $p = Start-Process -FilePath $exe -PassThru
+    [void]$p.WaitForExit(180000)
+    Remove-Item Env:\MIDIKEY_UI_SNAPSHOT_FOLDER, Env:\MIDIKEY_UI_SNAPSHOT_FOLDER_REPORT -ErrorAction SilentlyContinue
+
+    if (Test-Path -LiteralPath $report) {
+        foreach ($line in (Get-Content -LiteralPath $report -Encoding UTF8)) { Write-Host "   $line" }
+    }
+    if ($p.ExitCode -ne 0) {
+        throw "文件夹换歌回归失败，退出码 $($p.ExitCode)。报告：$report"
+    }
+}
+
 function Get-GitHubToken {
     $cred = "protocol=https`nhost=github.com`n" | git credential fill
     $token = ($cred | Where-Object { $_ -like 'password=*' }) -replace '^password=', ''
@@ -393,6 +415,9 @@ try {
     Write-Step '界面快照'
     $shots = Invoke-Snapshot $exe 'trim'
 
+    Write-Step '文件夹曲目卡换歌回归'
+    Invoke-FolderProbe $exe
+
     if ($TrimParity) {
         Write-Step '裁剪比对：另建一份不裁剪的 exe，逐字节比快照'
         $plainOut = Join-Path $env:TEMP "midikey-plain-$next"
@@ -448,5 +473,7 @@ try {
 }
 finally {
     Pop-Location
-    Remove-Item Env:\MIDIKEY_UI_SNAPSHOT, Env:\MIDIKEY_UI_SNAPSHOT_KEYMAP, Env:\MIDIKEY_UI_SNAPSHOT_MIX, Env:\MIDIKEY_UI_SNAPSHOT_MIDI -ErrorAction SilentlyContinue
+    Remove-Item Env:\MIDIKEY_UI_SNAPSHOT, Env:\MIDIKEY_UI_SNAPSHOT_KEYMAP, Env:\MIDIKEY_UI_SNAPSHOT_MIX, `
+        Env:\MIDIKEY_UI_SNAPSHOT_MIDI, Env:\MIDIKEY_UI_SNAPSHOT_REPORT, `
+        Env:\MIDIKEY_UI_SNAPSHOT_FOLDER, Env:\MIDIKEY_UI_SNAPSHOT_FOLDER_REPORT -ErrorAction SilentlyContinue
 }
