@@ -219,12 +219,21 @@ function Invoke-Snapshot([string]$exe, [string]$tag) {
     if ($q.ExitCode -ne 0) { throw "键位窗快照退出码 $($q.ExitCode)。" }
     Remove-Item Env:\MIDIKEY_UI_SNAPSHOT_KEYMAP -ErrorAction SilentlyContinue
 
-    foreach ($f in @($main, $keymap)) {
+    # 高级设置窗口：探针自己会走一遍「开 → 关 → 再开」，顺带验证内容归属来回搬是干净的
+    $advanced = Join-Path $env:TEMP "midikey-release-$tag-advanced.png"
+    Remove-Item $advanced -ErrorAction SilentlyContinue
+    $env:MIDIKEY_UI_SNAPSHOT_ADVANCED = $advanced
+    $r = Start-Process -FilePath $exe -PassThru
+    [void]$r.WaitForExit(180000)
+    if ($r.ExitCode -ne 0) { throw "高级设置窗口快照退出码 $($r.ExitCode)。" }
+    Remove-Item Env:\MIDIKEY_UI_SNAPSHOT_ADVANCED -ErrorAction SilentlyContinue
+
+    foreach ($f in @($main, $keymap, $advanced)) {
         if (-not (Test-Path -LiteralPath $f)) { throw "快照没出图：$f" }
         if ((Get-Item -LiteralPath $f).Length -lt 10000) { throw "快照太小，可能是空白：$f" }
     }
-    Write-Host "   主窗 $((Get-Item $main).Length) 字节；键位窗 $((Get-Item $keymap).Length) 字节"
-    return @{ Main = $main; Keymap = $keymap }
+    Write-Host "   主窗 $((Get-Item $main).Length) 字节；键位窗 $((Get-Item $keymap).Length) 字节；高级窗 $((Get-Item $advanced).Length) 字节"
+    return @{ Main = $main; Keymap = $keymap; Advanced = $advanced }
 }
 
 # 文件夹曲目卡换歌回归：连续点三首，每步都要换过去，列表行数不能塌。
@@ -426,7 +435,7 @@ try {
         & $dotnet publish $Proj -c Release -o $plainOut -p:PublishTrimmed=false | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "不裁剪构建失败，退出码 $LASTEXITCODE。" }
         $plainShots = Invoke-Snapshot (Join-Path $plainOut 'MidiKeyPlayer.exe') 'plain'
-        foreach ($k in @('Main', 'Keymap')) {
+        foreach ($k in @('Main', 'Keymap', 'Advanced')) {
             $a = (Get-FileHash $shots[$k] -Algorithm SHA256).Hash
             $b = (Get-FileHash $plainShots[$k] -Algorithm SHA256).Hash
             if ($a -ne $b) { throw "裁剪版与不裁剪版的 $k 快照不一致：$a / $b" }

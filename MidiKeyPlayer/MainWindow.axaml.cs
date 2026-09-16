@@ -2352,6 +2352,48 @@ public partial class MainWindow : Window
     // 存储仍是那一个真源：KeymapProfile.Current（方案 JSON）+ AppConfig.KeymapName。
 
     /// <summary>打开「键位设置」窗口（模态）。关闭后刷新卷帘颜色、按键表与状态行。</summary>
+    // ================= 高级设置窗口 =================
+    //
+    // 设备接入、输入兼容、三个热键、导出按键表、播放前自检这些控件声明在 MainWindow.axaml 的
+    // AdvancedStash 里（不可见、零尺寸）。点「高级设置…」时整块交给 AdvancedWindow 显示，
+    // 关窗再搬回来。这样做的好处：控件的 x:Name 与事件处理器都留在本文件，引用一行不用改，
+    // 也不存在两份状态。代价是内容归属会来回搬，所以进出都要走下面这两个方法。
+
+    private AdvancedWindow? _advancedWindow;
+
+    private void Advanced_Click(object? sender, RoutedEventArgs e)
+    {
+        if (_advancedWindow is { IsVisible: true })
+        {
+            _advancedWindow.Activate();   // 已经开着就提到前面，不重复搬
+            return;
+        }
+
+        // 先从藏身处摘下来再交给新窗口：控件还挂在 AdvancedStash 上时直接当 Content 会报
+        // 「已经有一个可视化父级」，窗口在首次布局时崩掉。
+        AdvancedStash.Child = null;
+
+        var win = new AdvancedWindow();
+        win.Attach(AdvancedBody);
+        _advancedWindow = win;
+        win.Show(this);
+        InsertLog("已打开高级设置：设备、兼容、热键、导出、自检都在这一个窗口里。");
+    }
+
+    /// <summary>AdvancedWindow 关窗时回调：把内容搬回主窗的隐藏容器，并放掉窗口引用。</summary>
+    internal void ReturnAdvancedBody(AdvancedWindow win)
+    {
+        var body = win.Detach();
+        if (body != null && body.Parent == null) AdvancedStash.Child = body;
+        if (ReferenceEquals(_advancedWindow, win)) _advancedWindow = null;
+    }
+
+    /// <summary>【开发用】走与按钮同一条链路打开高级设置窗口（快照用）。</summary>
+    internal void OpenAdvancedForDev() => Advanced_Click(null, new RoutedEventArgs());
+
+    /// <summary>【开发用】当前的高级设置窗口。没开就是 null。</summary>
+    internal AdvancedWindow? AdvancedWindowForDev => _advancedWindow;
+
     private async void Keymap_Click(object? sender, RoutedEventArgs e)
     {
         if (_busy) return;   // 演奏中不换键位：这一轮的按键表已经算好

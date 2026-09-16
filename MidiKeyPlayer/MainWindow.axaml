@@ -39,15 +39,6 @@
     <Style Selector="Window Button.accent">
       <Setter Property="Foreground" Value="{DynamicResource BrushOnAccent}"/>
     </Style>
-    <!-- 「高级」Expander：Fluent 默认的表头带 16,0,0,0 内边距与 1px 边框，放在卡里就是第二个盒子。
-         这里只压布局；表头的底色与边框走下面的 ExpanderHeader* 画刷键（见 Window.Resources）。
-         Expander 自身的 Background / BorderThickness / Padding / MinHeight / CornerRadius 由模板
-         TemplateBinding 取值，所以直接写在实例上（见下面「高级 + 播放前自检」那张卡）。 -->
-    <Style Selector="Window Expander /template/ ToggleButton#ExpanderHeader">
-      <Setter Property="Padding" Value="0"/>
-      <Setter Property="MinHeight" Value="0"/>
-      <Setter Property="CornerRadius" Value="0"/>
-    </Style>
   </Window.Styles>
 
   <!-- 打开入口是 SplitButton，它是 ContentControl，不是 Button：Styles\Controls.axaml 里的
@@ -65,17 +56,6 @@
       <StaticResource x:Key="SplitButtonForegroundPointerOver" ResourceKey="BrushOnAccent"/>
       <StaticResource x:Key="SplitButtonForegroundPressed" ResourceKey="BrushOnAccent"/>
       <StaticResource x:Key="SplitButtonForegroundDisabled" ResourceKey="BrushOnAccent"/>
-
-      <!-- 「高级」Expander 的表头在 Fluent 里是带底色的按钮，悬停与按下还会变灰。
-           它现在和「播放前自检」同在一张卡里，任何底色都会看成第二个盒子。
-           键名见 Avalonia.Themes.Fluent 的 Expander.xaml（表头的三个状态各自取 DynamicResource），
-           在这里覆盖成透明就把底色与 1px 边框一并压平，不再需要碰模板内部。 -->
-      <SolidColorBrush x:Key="ExpanderHeaderBackground" Color="Transparent"/>
-      <SolidColorBrush x:Key="ExpanderHeaderBackgroundPointerOver" Color="Transparent"/>
-      <SolidColorBrush x:Key="ExpanderHeaderBackgroundPressed" Color="Transparent"/>
-      <SolidColorBrush x:Key="ExpanderHeaderBorderBrush" Color="Transparent"/>
-      <SolidColorBrush x:Key="ExpanderHeaderBorderBrushPointerOver" Color="Transparent"/>
-      <SolidColorBrush x:Key="ExpanderHeaderBorderBrushPressed" Color="Transparent"/>
     </ResourceDictionary>
   </Window.Resources>
 
@@ -465,6 +445,12 @@
                       Padding="12,5" Classes="secondary" VerticalAlignment="Center"
                       Click="Keymap_Click"
                       ToolTip.Tip="打开键位设置窗口：方案、按键绑定、功能键"/>
+              <!-- 高级设置：设备、兼容、热键、导出、自检都搬进了独立窗口，
+                   主界面只留这一个入口按钮，不再往右栏底部堆控件。 -->
+              <Button x:Name="BtnAdvanced" Content="高级设置…" FontSize="{DynamicResource FontSmall}"
+                      Padding="12,5" Classes="secondary" VerticalAlignment="Center"
+                      Click="Advanced_Click"
+                      ToolTip.Tip="打开高级设置窗口：设备接入、输入兼容、热键、导出按键表、播放前自检"/>
               <TextBlock x:Name="TxtKeymapName" Classes="caption" VerticalAlignment="Center"
                          MaxWidth="180" TextTrimming="CharacterEllipsis"
                          ToolTip.Tip="当前键位方案名"/>
@@ -494,179 +480,159 @@
           </StackPanel>
         </Border>
 
-        <!-- ================= 一张卡：「高级」（默认收起）+「播放前自检」 =================
-             原来两块并排放：左边 Expander 带 Fluent 默认外框，右边自检自带一条边框，
-             看着像两个盒子。现在装进同一张 Border Classes="card"，中间一条竖线分区，
-             两块共用 Classes="sectionLabel" 的分区标题，字号取主题资源。
-             Expander 的默认外框被压平：内边距与最小高写在 Window.Styles 里，
-             表头的底色与边框由 Window.Resources 覆盖 ExpanderHeader* 画刷键。
-             展开时只是这张卡自然长高，不再套第二层盒子。
-             控件名、文案、事件处理器一律没改（RunPreflight() / BtnRecheck_Click 的引用照旧），
-             TxtCheckHint 仍是自检块内的第二行。
-             布局：*,Auto,Auto 三列。Expander 在 * 列（Stretch，窄窗口时标题说明折行），
-             竖线与自检在 Auto 列，永远不会被压扁或裁掉。 -->
-        <Border Classes="card" Padding="14,10">
-        <Grid ColumnDefinitions="*,Auto,Auto">
-        <Expander x:Name="AdvancedExpander" Grid.Column="0" IsExpanded="False" VerticalAlignment="Top"
-                  HorizontalAlignment="Stretch" MinHeight="0" Padding="0" CornerRadius="0"
-                  Background="Transparent" BorderThickness="0">
-          <Expander.Header>
-            <!-- 两段标题放进 Grid：窗口窄时说明文字折行，不会溢出到右边的自检块上 -->
-            <Grid ColumnDefinitions="Auto,*">
-              <TextBlock Grid.Column="0" Text="高级" Classes="sectionLabel"
-                         FontSize="{DynamicResource FontSmall}" FontWeight="SemiBold"
-                         VerticalAlignment="Center" Margin="0,0,8,0"/>
-              <TextBlock Grid.Column="1" Text="设备、兼容、热键、导出" Classes="caption"
-                         TextWrapping="Wrap" VerticalAlignment="Center"/>
-            </Grid>
-          </Expander.Header>
-
-          <StackPanel Spacing="10" Margin="0,8,0,0">
-
-            <!-- MIDI 设备接入。演奏中这一行用不到；勾了「实时演奏」就直接开着，
-                 不勾不影响任何文件播放功能。 -->
-            <Border Classes="card" Padding="14,10">
-              <StackPanel Spacing="6">
-                <WrapPanel ItemSpacing="18" LineSpacing="8">
-                  <CheckBox x:Name="ChkMidiLive" Content="MIDI 设备实时演奏" FontSize="{DynamicResource FontSmall}"
-                            VerticalAlignment="Center"
-                            ToolTip.Tip="接上 MIDI 键盘或打击垫，按键直接发送到目标程序。不勾选时本程序完全不碰这个设备"
-                            IsCheckedChanged="MidiLive_Changed"/>
-
-                  <StackPanel x:Name="PanelMidiControls" Orientation="Horizontal" Spacing="14"
-                              IsVisible="False" VerticalAlignment="Center">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                      <TextBlock Text="设备" Classes="label" MinWidth="34"/>
-                      <ComboBox x:Name="MidiDeviceCombo" Width="190" FontSize="{DynamicResource FontSmall}"
-                                VerticalAlignment="Center" SelectionChanged="MidiDevice_Changed"
-                                ToolTip.Tip="系统里的 MIDI 输入设备。热插拔后点右边「刷新」"/>
-                      <Button x:Name="BtnMidiRefresh" Content="刷新" FontSize="{DynamicResource FontSmall}"
-                              Padding="10,5" Classes="secondary" VerticalAlignment="Center"
-                              Click="MidiRefresh_Click" ToolTip.Tip="重新扫描 MIDI 输入设备"/>
-                    </StackPanel>
-                    <TextBlock x:Name="TxtMidiStatus" Text="未启用" Classes="value" VerticalAlignment="Center"
-                               Foreground="{DynamicResource BrushTextSecondary}"/>
-                  </StackPanel>
-
-                  <TextBlock x:Name="TxtMidiNoDevice" FontSize="{DynamicResource FontSmall}"
-                             VerticalAlignment="Center" Foreground="{DynamicResource BrushTextSecondary}"
-                             Text="没有检测到 MIDI 设备。接上键盘或打击垫后点「刷新」。"/>
-                </WrapPanel>
-
-                <WrapPanel x:Name="PanelMidiOptions" ItemSpacing="18" LineSpacing="8" IsVisible="False">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <TextBlock Text="基准八度" Classes="label" MinWidth="56"
-                               ToolTip.Tip="乐器中音 do 所在的八度。设备上弹这个八度的 do 就是目标程序里的中音 do"/>
-                    <Slider x:Name="SliderMidiOctave" Width="110" Minimum="1" Maximum="6" Value="4"
-                            TickFrequency="1" IsSnapToTickEnabled="True" VerticalAlignment="Center"
-                            ValueChanged="MidiOption_Changed"/>
-                    <TextBlock x:Name="TxtMidiOctave" Text="1" Classes="value" Width="52"/>
-                  </StackPanel>
-
-                  <CheckBox x:Name="ChkMidiAutoFit" Content="自动贴合音域" FontSize="{DynamicResource FontSmall}"
-                            IsChecked="True" VerticalAlignment="Center"
-                            ToolTip.Tip="按最近弹过的音自动挑基准八度。设备跨几个八度弹时，低音不会因为超出音域而不响"
-                            IsCheckedChanged="MidiAutoFit_Changed"/>
-
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <TextBlock Text="力度下限" Classes="label" MinWidth="56"
-                               ToolTip.Tip="低于这个力度的音忽略。设备有抖动或触后噪声时调高"/>
-                    <Slider x:Name="SliderMidiVelocity" Width="110" Minimum="1" Maximum="127" Value="1"
-                            TickFrequency="1" IsSnapToTickEnabled="True" VerticalAlignment="Center"
-                            ValueChanged="MidiOption_Changed"/>
-                    <TextBlock x:Name="TxtMidiVelocity" Text="1" Classes="value" Width="30"/>
-                  </StackPanel>
-                </WrapPanel>
-              </StackPanel>
-            </Border>
-
-            <!-- 输入兼容 + 三个热键 + 导出按键表。
-                 「输入兼容」原本孤零零待在左栏底部，却和三个热键同属「怎么把键发出去」的配置；
-                 合并成一张卡后右栏少一张卡，小窗口下卷帘能多分到高度。 -->
-            <Border Classes="card" Padding="14,10">
-              <WrapPanel ItemSpacing="22" LineSpacing="8">
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                  <TextBlock Text="输入兼容" Classes="label"
-                             ToolTip.Tip="目标程序按键是按帧读取的：修饰键与音键间隔太短会被折进同一帧，导致漏音。这里给出时间余量。"/>
-                  <ComboBox x:Name="TimingCombo" Width="150" FontSize="{DynamicResource FontSmall}"
-                            VerticalAlignment="Center" SelectionChanged="Timing_Changed"
-                            ToolTip.Tip="稳健=给30fps/掉帧留余量；标准=60fps 推荐；极限=高帧率下跟快歌。若仍漏音请选「稳健」。"/>
-                </StackPanel>
-
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                  <TextBlock Text="控制热键" Classes="label"
-                             ToolTip.Tip="一个键四用：空闲=开始，播放=暂停，暂停=继续，倒计时=取消"/>
-                  <ComboBox x:Name="HotkeyControlCombo" Width="86" FontSize="{DynamicResource FontSmall}"
-                            VerticalAlignment="Center" SelectionChanged="Hotkey_Changed"
-                            ToolTip.Tip="默认 F6"/>
-                </StackPanel>
-
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                  <TextBlock Text="后退热键" Classes="label"
-                             ToolTip.Tip="按一下后退 5 秒。播放中跳转可能让目标程序侧乐器卡音"/>
-                  <ComboBox x:Name="HotkeyRewindCombo" Width="86" FontSize="{DynamicResource FontSmall}"
-                            VerticalAlignment="Center" SelectionChanged="Hotkey_Changed"
-                            ToolTip.Tip="默认 F5"/>
-                </StackPanel>
-
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                  <TextBlock Text="前进热键" Classes="label"
-                             ToolTip.Tip="按一下前进 5 秒。播放中跳转可能让目标程序侧乐器卡音"/>
-                  <ComboBox x:Name="HotkeyForwardCombo" Width="86" FontSize="{DynamicResource FontSmall}"
-                            VerticalAlignment="Center" SelectionChanged="Hotkey_Changed"
-                            ToolTip.Tip="默认 F7"/>
-                </StackPanel>
-
-                <Button x:Name="BtnExport" Content="导出按键表 ▾" FontSize="{DynamicResource FontSmall}"
-                        Padding="12,5" Classes="secondary" VerticalAlignment="Center" IsEnabled="False"
-                        ToolTip.Tip="导出按键时序，与实际演奏一致">
-                  <Button.Flyout>
-                    <MenuFlyout Placement="Bottom">
-                      <MenuItem Header="罗技 G HUB 脚本 (.lua)" Click="ExportGhub_Click"/>
-                      <MenuItem Header="通用 CSV (.csv)" Click="ExportCsv_Click"/>
-                    </MenuFlyout>
-                  </Button.Flyout>
-                </Button>
-              </WrapPanel>
-            </Border>
-
-          </StackPanel>
-        </Expander>
-
-          <!-- 竖直分隔线：高级块与自检块的分区线。自检块不再自己套边框，靠这条线和间距分区。 -->
-          <Border Grid.Column="1" Width="1" Margin="14,4" VerticalAlignment="Stretch"
-                  Background="{DynamicResource BrushBorder}"/>
-
-          <!-- 播放前自检：常驻可见。通过打勾、未通过打叉。
-               WrapPanel 让长提示自动换行，不被右边裁掉；TxtCheckHint 是块内第二行。 -->
-          <StackPanel Grid.Column="2" Spacing="4" VerticalAlignment="Top">
-              <WrapPanel ItemSpacing="16" LineSpacing="6">
-                <TextBlock Text="播放前自检" Classes="sectionLabel" FontSize="{DynamicResource FontSmall}"
-                           FontWeight="SemiBold" VerticalAlignment="Center"/>
-                <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center"
-                            ToolTip.Tip="模拟按键受 Windows 的 UIPI 限制：目标程序若以管理员运行而本程序不是，按键会被系统拦截">
-                  <TextBlock x:Name="TxtCheckAdminMark" Text="–" FontSize="{DynamicResource FontBody}" FontWeight="Bold"
-                             Foreground="{DynamicResource BrushTextMuted}" VerticalAlignment="Center"/>
-                  <TextBlock x:Name="TxtCheckAdmin" Text="管理员" FontSize="{DynamicResource FontSmall}" VerticalAlignment="Center"/>
-                </StackPanel>
-                <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center"
-                            ToolTip.Tip="只有输入法开着并且处于中文/假名输入状态时才会截走按键。中文键盘布局切到英文模式可以直接用，不会误报">
-                  <TextBlock x:Name="TxtCheckImeMark" Text="–" FontSize="{DynamicResource FontBody}" FontWeight="Bold"
-                             Foreground="{DynamicResource BrushTextMuted}" VerticalAlignment="Center"/>
-                  <TextBlock x:Name="TxtCheckIme" Text="输入法" FontSize="{DynamicResource FontSmall}" VerticalAlignment="Center"/>
-                </StackPanel>
-                <Button x:Name="BtnRecheck" Content="刷新" FontSize="{DynamicResource FontCaption}" Padding="10,3"
-                        Classes="secondary" VerticalAlignment="Center" Click="BtnRecheck_Click"
-                        ToolTip.Tip="重新检测管理员权限与输入法状态（切换中英文模式后点一下即可）"/>
-              </WrapPanel>
-              <TextBlock x:Name="TxtCheckHint" Classes="caption" Foreground="{DynamicResource BrushWarn}"
-                         TextWrapping="Wrap"/>
-          </StackPanel>
-        </Grid>
-        </Border>
       </StackPanel>
     </Grid>
   </DockPanel>
+
+  <!-- ================= 高级设置的实体内容（不在主界面显示） =================
+       这块内容由「高级设置…」按钮搬进 AdvancedWindow 显示，关窗再搬回来。
+       为什么把 XAML 留在主窗：这些控件的 x:Name 与事件处理器都在 MainWindow.axaml.cs 里，
+       搬走声明就要连带改几十处引用与处理器归属；留在原处则代码一行不动，
+       控件实例也只有一个，不存在两份状态。
+       藏法：外层 Border 不可见且零尺寸，内容在视觉树上但不参与布局。 -->
+  <Border x:Name="AdvancedStash" IsVisible="False" Width="0" Height="0">
+    <StackPanel x:Name="AdvancedBody" Spacing="10">
+
+      <!-- MIDI 设备接入。演奏中这一行用不到；勾了「实时演奏」就直接开着，
+           不勾不影响任何文件播放功能。 -->
+      <Border Classes="card" Padding="14,10">
+        <StackPanel Spacing="6">
+          <TextBlock Text="设备接入" Classes="sectionLabel" FontSize="{DynamicResource FontSmall}"
+                     FontWeight="SemiBold"/>
+          <WrapPanel ItemSpacing="18" LineSpacing="8">
+            <CheckBox x:Name="ChkMidiLive" Content="MIDI 设备实时演奏" FontSize="{DynamicResource FontSmall}"
+                      VerticalAlignment="Center"
+                      ToolTip.Tip="接上 MIDI 键盘或打击垫，按键直接发送到目标程序。不勾选时本程序完全不碰这个设备"
+                      IsCheckedChanged="MidiLive_Changed"/>
+
+            <StackPanel x:Name="PanelMidiControls" Orientation="Horizontal" Spacing="14"
+                        IsVisible="False" VerticalAlignment="Center">
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="设备" Classes="label" MinWidth="34"/>
+                <ComboBox x:Name="MidiDeviceCombo" Width="190" FontSize="{DynamicResource FontSmall}"
+                          VerticalAlignment="Center" SelectionChanged="MidiDevice_Changed"
+                          ToolTip.Tip="系统里的 MIDI 输入设备。热插拔后点右边「刷新」"/>
+                <Button x:Name="BtnMidiRefresh" Content="刷新" FontSize="{DynamicResource FontSmall}"
+                        Padding="10,5" Classes="secondary" VerticalAlignment="Center"
+                        Click="MidiRefresh_Click" ToolTip.Tip="重新扫描 MIDI 输入设备"/>
+              </StackPanel>
+              <TextBlock x:Name="TxtMidiStatus" Text="未启用" Classes="value" VerticalAlignment="Center"
+                         Foreground="{DynamicResource BrushTextSecondary}"/>
+            </StackPanel>
+
+            <TextBlock x:Name="TxtMidiNoDevice" FontSize="{DynamicResource FontSmall}"
+                       VerticalAlignment="Center" Foreground="{DynamicResource BrushTextSecondary}"
+                       Text="没有检测到 MIDI 设备。接上键盘或打击垫后点「刷新」。"/>
+          </WrapPanel>
+
+          <WrapPanel x:Name="PanelMidiOptions" ItemSpacing="18" LineSpacing="8" IsVisible="False">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Text="基准八度" Classes="label" MinWidth="56"
+                         ToolTip.Tip="乐器中音 do 所在的八度。设备上弹这个八度的 do 就是目标程序里的中音 do"/>
+              <Slider x:Name="SliderMidiOctave" Width="110" Minimum="1" Maximum="6" Value="4"
+                      TickFrequency="1" IsSnapToTickEnabled="True" VerticalAlignment="Center"
+                      ValueChanged="MidiOption_Changed"/>
+              <TextBlock x:Name="TxtMidiOctave" Text="1" Classes="value" Width="52"/>
+            </StackPanel>
+
+            <CheckBox x:Name="ChkMidiAutoFit" Content="自动贴合音域" FontSize="{DynamicResource FontSmall}"
+                      IsChecked="True" VerticalAlignment="Center"
+                      ToolTip.Tip="按最近弹过的音自动挑基准八度。设备跨几个八度弹时，低音不会因为超出音域而不响"
+                      IsCheckedChanged="MidiAutoFit_Changed"/>
+
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Text="力度下限" Classes="label" MinWidth="56"
+                         ToolTip.Tip="低于这个力度的音忽略。设备有抖动或触后噪声时调高"/>
+              <Slider x:Name="SliderMidiVelocity" Width="110" Minimum="1" Maximum="127" Value="1"
+                      TickFrequency="1" IsSnapToTickEnabled="True" VerticalAlignment="Center"
+                      ValueChanged="MidiOption_Changed"/>
+              <TextBlock x:Name="TxtMidiVelocity" Text="1" Classes="value" Width="30"/>
+            </StackPanel>
+          </WrapPanel>
+        </StackPanel>
+      </Border>
+
+      <!-- 输入兼容 + 三个热键 + 导出按键表 -->
+      <Border Classes="card" Padding="14,10">
+        <StackPanel Spacing="6">
+          <TextBlock Text="按键发送与热键" Classes="sectionLabel" FontSize="{DynamicResource FontSmall}"
+                     FontWeight="SemiBold"/>
+          <WrapPanel ItemSpacing="22" LineSpacing="8">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Text="输入兼容" Classes="label"
+                         ToolTip.Tip="目标程序按键是按帧读取的：修饰键与音键间隔太短会被折进同一帧，导致漏音。这里给出时间余量。"/>
+              <ComboBox x:Name="TimingCombo" Width="150" FontSize="{DynamicResource FontSmall}"
+                        VerticalAlignment="Center" SelectionChanged="Timing_Changed"
+                        ToolTip.Tip="稳健=给30fps/掉帧留余量；标准=60fps 推荐；极限=高帧率下跟快歌。若仍漏音请选「稳健」。"/>
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Text="控制热键" Classes="label"
+                         ToolTip.Tip="一个键四用：空闲=开始，播放=暂停，暂停=继续，倒计时=取消"/>
+              <ComboBox x:Name="HotkeyControlCombo" Width="86" FontSize="{DynamicResource FontSmall}"
+                        VerticalAlignment="Center" SelectionChanged="Hotkey_Changed"
+                        ToolTip.Tip="默认 F6"/>
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Text="后退热键" Classes="label"
+                         ToolTip.Tip="按一下后退 5 秒。播放中跳转可能让目标程序侧乐器卡音"/>
+              <ComboBox x:Name="HotkeyRewindCombo" Width="86" FontSize="{DynamicResource FontSmall}"
+                        VerticalAlignment="Center" SelectionChanged="Hotkey_Changed"
+                        ToolTip.Tip="默认 F5"/>
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Text="前进热键" Classes="label"
+                         ToolTip.Tip="按一下前进 5 秒。播放中跳转可能让目标程序侧乐器卡音"/>
+              <ComboBox x:Name="HotkeyForwardCombo" Width="86" FontSize="{DynamicResource FontSmall}"
+                        VerticalAlignment="Center" SelectionChanged="Hotkey_Changed"
+                        ToolTip.Tip="默认 F7"/>
+            </StackPanel>
+
+            <Button x:Name="BtnExport" Content="导出按键表 ▾" FontSize="{DynamicResource FontSmall}"
+                    Padding="12,5" Classes="secondary" VerticalAlignment="Center" IsEnabled="False"
+                    ToolTip.Tip="导出按键时序，与实际演奏一致">
+              <Button.Flyout>
+                <MenuFlyout Placement="Bottom">
+                  <MenuItem Header="罗技 G HUB 脚本 (.lua)" Click="ExportGhub_Click"/>
+                  <MenuItem Header="通用 CSV (.csv)" Click="ExportCsv_Click"/>
+                </MenuFlyout>
+              </Button.Flyout>
+            </Button>
+          </WrapPanel>
+        </StackPanel>
+      </Border>
+
+      <!-- 播放前自检：通过打勾、未通过打叉。原来是主界面常驻的一小块，现在跟着高级设置走。 -->
+      <Border Classes="card" Padding="14,10">
+        <StackPanel Spacing="4">
+          <WrapPanel ItemSpacing="16" LineSpacing="6">
+            <TextBlock Text="播放前自检" Classes="sectionLabel" FontSize="{DynamicResource FontSmall}"
+                       FontWeight="SemiBold" VerticalAlignment="Center"/>
+            <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center"
+                        ToolTip.Tip="模拟按键受 Windows 的 UIPI 限制：目标程序若以管理员运行而本程序不是，按键会被系统拦截">
+              <TextBlock x:Name="TxtCheckAdminMark" Text="–" FontSize="{DynamicResource FontBody}" FontWeight="Bold"
+                         Foreground="{DynamicResource BrushTextMuted}" VerticalAlignment="Center"/>
+              <TextBlock x:Name="TxtCheckAdmin" Text="管理员" FontSize="{DynamicResource FontSmall}" VerticalAlignment="Center"/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center"
+                        ToolTip.Tip="只有输入法开着并且处于中文/假名输入状态时才会截走按键。中文键盘布局切到英文模式可以直接用，不会误报">
+              <TextBlock x:Name="TxtCheckImeMark" Text="–" FontSize="{DynamicResource FontBody}" FontWeight="Bold"
+                         Foreground="{DynamicResource BrushTextMuted}" VerticalAlignment="Center"/>
+              <TextBlock x:Name="TxtCheckIme" Text="输入法" FontSize="{DynamicResource FontSmall}" VerticalAlignment="Center"/>
+            </StackPanel>
+            <Button x:Name="BtnRecheck" Content="刷新" FontSize="{DynamicResource FontCaption}" Padding="10,3"
+                    Classes="secondary" VerticalAlignment="Center" Click="BtnRecheck_Click"
+                    ToolTip.Tip="重新检测管理员权限与输入法状态（切换中英文模式后点一下即可）"/>
+          </WrapPanel>
+          <TextBlock x:Name="TxtCheckHint" Classes="caption" Foreground="{DynamicResource BrushWarn}"
+                     TextWrapping="Wrap"/>
+        </StackPanel>
+      </Border>
+
+    </StackPanel>
+  </Border>
 
   <!-- 首次启动浮层。点「知道了」后写入设置，之后不再弹出。 -->
   <Border x:Name="QuickStartOverlay" IsVisible="False" Background="#66101828" CornerRadius="0">

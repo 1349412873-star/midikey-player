@@ -22,7 +22,8 @@ internal static class DevSnapshotMode
         || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_MIX"))
         || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_REPORT"))
         || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_FOLDER"))
-        || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_FOLDER_REPORT"));
+        || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_FOLDER_REPORT"))
+        || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_ADVANCED"));
 }
 
 /// <summary>
@@ -52,9 +53,10 @@ public partial class MainWindow
         var mixMode = Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_MIX");
         var reportPath = Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_REPORT");
         var folderProbe = Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_FOLDER");
+        var advancedPath = Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_ADVANCED");
         if (string.IsNullOrWhiteSpace(path) && string.IsNullOrWhiteSpace(keymapPath)
             && string.IsNullOrWhiteSpace(midiPath) && string.IsNullOrWhiteSpace(reportPath)
-            && string.IsNullOrWhiteSpace(folderProbe)) return;
+            && string.IsNullOrWhiteSpace(folderProbe) && string.IsNullOrWhiteSpace(advancedPath)) return;
 
         window.Opened += (_, _) =>
         {
@@ -83,6 +85,13 @@ public partial class MainWindow
             {
                 RunFolderClickProbe(window, folderProbe!,
                     Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_FOLDER_REPORT"));
+                return;
+            }
+
+            // 高级设置窗口快照：先按「高级设置…」把内容搬过去，再拍那个窗口
+            if (!string.IsNullOrWhiteSpace(advancedPath))
+            {
+                CaptureAdvanced(window, advancedPath!);
                 return;
             }
             // 等布局就绪，900ms 是实测够用的值
@@ -228,9 +237,68 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>
+    /// 【开发用】打开「高级设置」窗口并拍成 PNG。
+    /// MIDIKEY_UI_SNAPSHOT_ADVANCED=&lt;png 路径&gt;
+    /// </summary>
+    private static void CaptureAdvanced(MainWindow owner, string path)
+    {
+        // 先走一遍「开 → 关 → 再开」：关窗要把内容还给主窗，再开要能再搬一次。
+        // 这一圈跑通，才说明内容归属来回搬是干净的。
+        owner.OpenAdvancedForDev();
+        var first = owner.AdvancedWindowForDev;
+        first?.Close();
+        owner.OpenAdvancedForDev();
+
+        var win = owner.AdvancedWindowForDev;
+        if (win == null)
+        {
+            Console.Error.WriteLine("高级设置窗口没打开");
+            owner.DevCleanUpForExit();
+            Environment.Exit(1);
+        }
+
+        // 与键位窗快照同一个做法：计时器里拍照再退出；另配一个兜底计时器
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(800) };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            ShotVisual(win!, path);   // 拍窗口本体：拍 Content 会把搬过来的控件画重影
+            owner.DevCleanUpForExit();
+            Environment.Exit(0);
+        };
+        timer.Start();
+
+        var guard = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1600) };
+        guard.Tick += (_, _) =>
+        {
+            guard.Stop();
+            ShotVisual(win!, path);
+            owner.DevCleanUpForExit();
+            Environment.Exit(0);
+        };
+        guard.Start();
+    }
+
+    /// <summary>把任意可视化元素渲染成 PNG（按元素自身尺寸）。</summary>
+    private static void ShotVisual(Visual visual, string path)
+    {
+        try
+        {
+            int w = Math.Max(1, (int)Math.Ceiling(visual.Bounds.Width));
+            int h = Math.Max(1, (int)Math.Ceiling(visual.Bounds.Height));
+            Save(visual, path, new PixelSize(w, h), new Vector(96, 96));
+            Console.WriteLine($"Snapshot saved: {path} ({w}x{h})");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine("snapshot failed: " + ex);
+            Log("snapshot failed: " + ex);
+        }
+    }
+
     /// <summary>【开发用】按目录扫描并刷新曲目卡（回归场景用）。</summary>
     internal void ScanMidiFolderForDev(string dir) => ScanMidiFolder(dir);
-
     /// <summary>【开发用】当前已载入的文件路径。没载入就是空串。</summary>
     internal string ParsedPathForDev => _parsed?.FilePath ?? "";
 
