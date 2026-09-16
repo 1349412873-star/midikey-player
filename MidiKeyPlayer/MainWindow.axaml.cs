@@ -2352,68 +2352,59 @@ public partial class MainWindow : Window
     // 存储仍是那一个真源：KeymapProfile.Current（方案 JSON）+ AppConfig.KeymapName。
 
     /// <summary>打开「键位设置」窗口（模态）。关闭后刷新卷帘颜色、按键表与状态行。</summary>
-    // ================= 高级设置窗口 =================
+    // ================= 设置窗口 =================
     //
-    // 设备接入、输入兼容、三个热键、导出按键表、播放前自检这些控件声明在 MainWindow.axaml 的
-    // AdvancedStash 里（不可见、零尺寸）。点「高级设置…」时整块交给 AdvancedWindow 显示，
-    // 关窗再搬回来。这样做的好处：控件的 x:Name 与事件处理器都留在本文件，引用一行不用改，
-    // 也不存在两份状态。代价是内容归属会来回搬，所以进出都要走下面这两个方法。
+    // 设置窗口两页：常规（设备、兼容、热键、导出、自检）与键位（方案、按键绑定、功能键）。
+    //
+    // 常规页的控件声明在 MainWindow.axaml 的 AdvancedStash 里（不可见、零尺寸），
+    // 打开设置时整块交给窗口的常规页，关窗再搬回来。好处是这些控件的 x:Name 与事件处理器
+    // 都留在本文件，引用一行不用改，也不存在两份状态。
+    // 键位页的控件与逻辑直接住在 SettingsWindow 里（见 SettingsWindow.Keymap.cs），
+    // 原来那个独立的「键位设置」窗口已经并进来。
 
-    private AdvancedWindow? _advancedWindow;
+    private SettingsWindow? _settingsWindow;
 
-    private void Advanced_Click(object? sender, RoutedEventArgs e)
+    private void Settings_Click(object? sender, RoutedEventArgs e) => OpenSettings();
+
+    /// <summary>打开设置窗口（已开着就提到前面）。演奏中不换键位：这一轮的按键表已经算好。</summary>
+    internal void OpenSettings()
     {
-        if (_advancedWindow is { IsVisible: true })
+        if (_busy) return;
+        if (_settingsWindow is { IsVisible: true })
         {
-            _advancedWindow.Activate();   // 已经开着就提到前面，不重复搬
+            _settingsWindow.Activate();
             return;
         }
 
-        // 先从藏身处摘下来再交给新窗口：控件还挂在 AdvancedStash 上时直接当 Content 会报
+        // 先从藏身处摘下来再交给设置窗口：控件还挂在 AdvancedStash 上时直接当 Content 会报
         // 「已经有一个可视化父级」，窗口在首次布局时崩掉。
         AdvancedStash.Child = null;
 
-        var win = new AdvancedWindow();
-        win.Attach(AdvancedBody);
-        _advancedWindow = win;
+        var win = new SettingsWindow(_keymap, OnKeymapPath, RememberCurrentProfileSettings,
+                                     ApplyProfileSettingsFromDialog);
+        win.AttachAdvancedBody(AdvancedBody, this);
+        _settingsWindow = win;
         win.Show(this);
-        InsertLog("已打开高级设置：设备、兼容、热键、导出、自检都在这一个窗口里。");
+        InsertLog("已打开设置：常规与键位两页都在这里。");
     }
 
-    /// <summary>AdvancedWindow 关窗时回调：把内容搬回主窗的隐藏容器，并放掉窗口引用。</summary>
-    internal void ReturnAdvancedBody(AdvancedWindow win)
+    /// <summary>设置窗口关窗时回调：把常规页的内容还回主窗，并同步键位改动。</summary>
+    internal void ReturnAdvancedBody(Control body)
     {
-        var body = win.Detach();
-        if (body != null && body.Parent == null) AdvancedStash.Child = body;
-        if (ReferenceEquals(_advancedWindow, win)) _advancedWindow = null;
-    }
-
-    /// <summary>【开发用】走与按钮同一条链路打开高级设置窗口（快照用）。</summary>
-    internal void OpenAdvancedForDev() => Advanced_Click(null, new RoutedEventArgs());
-
-    /// <summary>【开发用】当前的高级设置窗口。没开就是 null。</summary>
-    internal AdvancedWindow? AdvancedWindowForDev => _advancedWindow;
-
-    private async void Keymap_Click(object? sender, RoutedEventArgs e)
-    {
-        if (_busy) return;   // 演奏中不换键位：这一轮的按键表已经算好
-        var win = new KeymapWindow(_keymap, OnKeymapPath, RememberCurrentProfileSettings,
-                                   ApplyProfileSettingsFromDialog);
-        try
-        {
-            await win.ShowDialog(this);
-        }
-        catch (Exception ex)
-        {
-            InsertLog($"打开键位设置失败：{ex.GetType().Name}: {ex.Message}");
-            return;
-        }
+        if (body.Parent == null) AdvancedStash.Child = body;
+        _settingsWindow = null;
         // 关窗兜底再同步一次：窗口里改过键位、音域或策略都要落到卷帘与状态行上
         SyncKeymapUi();
         ScheduleSave();
     }
 
-    /// <summary>键位窗口的回调：saved 非空表示刚保存的方案，message 是要记进日志的中文说明。</summary>
+    /// <summary>【开发用】走与按钮同一条链路打开设置窗口（快照用）。</summary>
+    internal void OpenSettingsForDev() => OpenSettings();
+
+    /// <summary>【开发用】当前的设置窗口。没开就是 null。</summary>
+    internal SettingsWindow? SettingsWindowForDev => _settingsWindow;
+
+    /// <summary>设置窗口的回调：saved 非空表示刚保存的方案，message 是要记进日志的中文说明。</summary>
     private void OnKeymapPath(KeymapProfile? saved, string message)
     {
         if (saved != null)
@@ -3032,8 +3023,8 @@ public partial class MainWindow : Window
         ChkAutoMinimize.IsEnabled = !busy;
         BtnPreview.IsEnabled = !busy;
         CountdownCombo.IsEnabled = !busy;
-        // 键位方案在演奏中不换：一轮演奏的按键表在开始时就已经算好（控件都在键位窗口里，这里只锁入口）
-        if (BtnKeymap != null) BtnKeymap.IsEnabled = !busy;
+        // 键位方案在演奏中不换：一轮演奏的按键表在开始时就已经算好（键位页在设置窗口里，这里只锁入口）
+        if (BtnSettings != null) BtnSettings.IsEnabled = !busy;
         // 一键移调 / 导出的可用性统一由 UpdateActionButtons() 决定，这里不再覆盖。
         UpdateActionButtons();
 

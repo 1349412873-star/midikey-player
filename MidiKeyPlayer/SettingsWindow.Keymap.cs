@@ -32,7 +32,7 @@ namespace MidiKeyPlayer;
 /// 再通过 <see cref="ApplyPath"/> 交回主窗（主窗自己决定记日志与刷卷帘）。
 /// 键位录入只挂窗口自己的 KeyDown 与 PointerPressed：窗口一关，等待态随窗口一起消失。
 /// </summary>
-public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
+public sealed partial class SettingsWindow : Window, INotifyPropertyChanged
 {
     /// <summary>把改动交回主窗：saved 表示刚保存的方案，message 是要记进主窗日志的中文说明。</summary>
     private readonly Action<KeymapProfile?, string> _applyPath;
@@ -70,11 +70,11 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
     };
 
     /// <summary>无参构造只给设计器与 XAML 加载用；实际使用走带回调的那个重载。</summary>
-    public KeymapWindow() : this(KeymapProfile.Current ?? KeymapProfile.Default, null, null, null)
+    public SettingsWindow() : this(KeymapProfile.Current ?? KeymapProfile.Default, null, null, null)
     {
     }
 
-    public KeymapWindow(KeymapProfile profile,
+    public SettingsWindow(KeymapProfile profile,
                         Action<KeymapProfile?, string>? applyPath,
                         Action? rememberSettings,
                         Func<KeymapProfile, string?>? applyProfileSettings)
@@ -484,6 +484,7 @@ public sealed partial class KeymapWindow : Window, INotifyPropertyChanged
     private void Window_Closed(object? sender, EventArgs e)
     {
         EndWaiting(false);
+        OnSettingsClosed();   // 把「常规」页的内容还回主窗（见 SettingsWindow.axaml.cs）
     }
 
     // ================= 等待按键 =================
@@ -1721,7 +1722,7 @@ internal abstract class KeyCapRow : INotifyPropertyChanged
 
     /// <summary>
     /// 键帽的提示气泡。方块只有 76 宽，逗号 / 句点这类键名写不下全称，
-    /// 全称放在这里（<see cref="KeymapWindow.LongNameOf"/>）。等待态不改提示语。
+    /// 全称放在这里（<see cref="SettingsWindow.LongNameOf"/>）。等待态不改提示语。
     /// </summary>
     public string CapTip
     {
@@ -1730,7 +1731,7 @@ internal abstract class KeyCapRow : INotifyPropertyChanged
             // 右键菜单没有可见入口，把它的存在写进提示气泡里
             const string rightMenu = "右键这个方块可以改音高，也可以解绑。";
             if (_keyText.Length == 0) return $"点这个方块，再按一个键，就把这个键绑到这个音。{rightMenu}";
-            string extra = KeymapWindow.LongNameOf(_keyText);
+            string extra = SettingsWindow.LongNameOf(_keyText);
             return extra.Length > 0
                 ? $"当前绑的是 {extra}。点一下再按一个键就能换绑。{rightMenu}"
                 : $"点这个方块，再按一个键，就把这个键绑到这个音。{rightMenu}";
@@ -1805,7 +1806,7 @@ internal sealed class RowVM : KeyCapRow
     public string PitchName => Music.SolfegeName(_pitch);
 
     /// <summary>报告与诊断用的音高文字，形如「1(do)」。方块里不再显示唱名。</summary>
-    public string PitchLabel => KeymapWindow.NoteLabelOf(_pitch);
+    public string PitchLabel => SettingsWindow.NoteLabelOf(_pitch);
 
     private bool _duplicate;
     /// <summary>同一个物理键绑到了多个音：方块描红边提醒。</summary>

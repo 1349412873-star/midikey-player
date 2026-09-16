@@ -243,22 +243,23 @@ public partial class MainWindow
     /// </summary>
     private static void CaptureAdvanced(MainWindow owner, string path)
     {
-        // 先走一遍「开 → 关 → 再开」：关窗要把内容还给主窗，再开要能再搬一次。
+        // 先走一遍「开 → 关 → 再开」：关窗要把常规页的内容还给主窗，再开要能再搬一次。
         // 这一圈跑通，才说明内容归属来回搬是干净的。
-        owner.OpenAdvancedForDev();
-        var first = owner.AdvancedWindowForDev;
+        owner.OpenSettingsForDev();
+        var first = owner.SettingsWindowForDev;
         first?.Close();
-        owner.OpenAdvancedForDev();
+        owner.OpenSettingsForDev();
 
-        var win = owner.AdvancedWindowForDev;
+        var win = owner.SettingsWindowForDev;
         if (win == null)
         {
-            Console.Error.WriteLine("高级设置窗口没打开");
+            Console.Error.WriteLine("设置窗口没打开");
             owner.DevCleanUpForExit();
             Environment.Exit(1);
         }
+        win.SelectPageForDev(0);   // 常规页
 
-        // 与键位窗快照同一个做法：计时器里拍照再退出；另配一个兜底计时器
+        // 与键位页快照同一个做法：计时器里拍照再退出；另配一个兜底计时器
         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(800) };
         timer.Tick += (_, _) =>
         {
@@ -511,16 +512,24 @@ public partial class MainWindow
     /// </summary>
     private static void CaptureKeymap(MainWindow owner, string path)
     {
-        var win = new KeymapWindow(KeymapProfile.Current ?? KeymapProfile.Default, null, null, null);
-        win.Show(owner);
-        Log($"键位窗口已打开 IsVisible={win.IsVisible}");
+        // 键位页现在是设置窗口的第二页：打开设置，切到「键位」，再拍整窗。
+        owner.OpenSettingsForDev();
+        var win = owner.SettingsWindowForDev;
+        if (win == null)
+        {
+            Console.Error.WriteLine("设置窗口没打开");
+            owner.DevCleanUpForExit();
+            Environment.Exit(1);
+        }
+        win.SelectPageForDev(1);   // 键位页
+        Log($"设置窗口已打开 IsVisible={win.IsVisible}，当前页 = 键位");
 
         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
         timer.Tick += (_, _) =>
         {
             timer.Stop();
-            Log("键位快照计时器触发");
-            Shot(win, path);
+            Log("键位页快照计时器触发");
+            ShotVisual(win, path);   // 拍窗口本体：拍 Content 会把搬过来的控件画重影
             owner.DevCleanUpForExit();   // A19：退出前走一遍显式清理
             Environment.Exit(0);
         };
@@ -532,7 +541,7 @@ public partial class MainWindow
         {
             guard.Stop();
             Log("兜底计时器触发");
-            Shot(win, path);
+            ShotVisual(win, path);
             owner.DevCleanUpForExit();   // A19：退出前走一遍显式清理
             Environment.Exit(0);
         };

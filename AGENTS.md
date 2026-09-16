@@ -6,11 +6,14 @@
 
 - 每次发 release 一律发新版本。版本号自动加一（默认补丁号 +1）。
 - 已经发布的包不动、不覆盖、不重传。tag 已存在就停手。
-- 发版全自动：构建、自检、三个窗口的界面快照、换歌回归、提交、推 main、打 tag、建 Release、
-  上传 zip 一次做完。不要问用户「要不要发」，也不要停在上传之前。用户改口之前，这就是默认动作。
+- 发版全自动：构建、自检、主窗与设置窗两页的界面快照、换歌回归、提交、推 main、打 tag、
+  建 Release、上传 zip 一次做完。不要问用户「要不要发」，也不要停在上传之前。
+  用户改口之前，这就是默认动作。
 - 上传后自动校验：比对远端资产的 sha256 与本地 zip。不一致就报错。
 - 发版脚本会跑文件夹曲目卡换歌回归（连续点三首，列表不能塌）。这条回归对应的 bug 是
   「选了一首之后别的点不动」，改 `FolderList_SelectionChanged` 或 `RefreshFolderUi` 之后必须跑。
+- 设置窗口的「常规」页内容住在 MainWindow.axaml 的 AdvancedStash 里，开窗搬进去、关窗搬回来。
+  动 `SettingsWindow` 或那段 XAML 之后，必须跑设置窗快照（它自带开→关→再开）。
 - 发版走脚本：`powershell -File tools\release.ps1`。
 - 想先看会发什么：`powershell -File tools\release.ps1 -DryRun`。
 - 想只构建不发布：`powershell -File tools\release.ps1 -SkipPush`。

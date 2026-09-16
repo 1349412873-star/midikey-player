@@ -1,9 +1,9 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        x:Class="MidiKeyPlayer.KeymapWindow"
-        Title="键位设置"
-        Width="900" Height="680"
-        MinWidth="720" MinHeight="560"
+        x:Class="MidiKeyPlayer.SettingsWindow"
+        Title="设置"
+        Width="640" Height="470"
+        MinWidth="560" MinHeight="420"
         WindowStartupLocation="CenterOwner"
         Background="{DynamicResource BrushCanvas}"
         FontFamily="{DynamicResource FontUi}"
@@ -104,7 +104,28 @@
     </Style>
   </Window.Styles>
 
-  <!-- 下半部分：滚动内容 + 常驻统计行 -->
+  <!-- 两页：常规（设备、兼容、热键、导出、自检）与键位（方案、按键绑定、功能键）。
+       常规页的内容由 MainWindow 在打开时搬进来（AdvancedHost），键位页的控件就声明在这里。
+       窗口大小跟着页签走：常规页小、键位页大，见 SettingsWindow.axaml.cs 的 ApplyPageSize。 -->
+  <DockPanel>
+
+    <!-- 底部：一句话说明 + 关闭。设置即时生效，没有「应用」按钮 -->
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right"
+                Spacing="10" Margin="14,8,14,12">
+      <TextBlock Classes="caption" VerticalAlignment="Center"
+                 Text="改动即时生效，关掉本窗口不影响设置。"/>
+      <Button Content="关闭" Classes="secondary" Padding="18,6" Click="CloseSettings_Click"/>
+    </StackPanel>
+
+    <TabControl x:Name="Pages" SelectionChanged="Pages_SelectionChanged"
+                Background="Transparent" Padding="0" Margin="10,8,10,0">
+      <TabItem Header="常规">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+          <ContentControl x:Name="AdvancedHost" Margin="6,10,6,6"/>
+        </ScrollViewer>
+      </TabItem>
+
+      <TabItem Header="键位">
   <Grid RowDefinitions="*,Auto">
 
     <ScrollViewer Grid.Row="0" x:Name="MainScroll"
@@ -295,4 +316,7 @@
       <TextBlock Text="{Binding StatsText}" Classes="caption" TextWrapping="Wrap"/>
     </Border>
   </Grid>
+      </TabItem>
+    </TabControl>
+  </DockPanel>
 </Window>
