@@ -244,6 +244,7 @@ MidiKeyPlayer/build-win.sh  # 发布脚本：打包成单文件 exe 的 zip
 MidiKeyPlayer/release/      # 发布产物：zip 与解出的 exe（打包生成）
 示例MIDI/                   # 开发用示例曲目（不进发布包）
 tools/run-selftest.ps1      # 跑一次内置自检，统计 PASS / FAIL
+tools/release.ps1           # 发新版：版本号加一、写日志、构建、验证、发 Release
 LICENSE                     # MIT 许可
 THIRD-PARTY-NOTICES.md      # 第三方组件许可声明
 ```
@@ -272,28 +273,34 @@ THIRD-PARTY-NOTICES.md      # 第三方组件许可声明
 
 打包命令是 `bash MidiKeyPlayer/build-win.sh`，产物在 `MidiKeyPlayer/release/` 下。
 
-发新版之前，先做两件事：
+发新版走发版脚本 `tools/release.ps1`。它把下面这些事一次做完：
 
-1. 把 `MidiKeyPlayer/MidiKeyPlayer.csproj` 里的 `<Version>` 改成新版本号。
-2. 在 `MidiKeyPlayer/docs/更新日志.txt` 最上面加一节，写清这一版改了什么。
-   旧版本的记录留在原处，不删、不改、不覆盖。
+1. 版本号补丁号 +1（`-Bump Minor` / `-Bump Major` 可改）。
+2. 在 `MidiKeyPlayer/docs/更新日志.txt` 最上面加新版本一节。
+   不给 `-Notes` 时，用上个 tag 以来的提交标题当草稿。
+3. 改 `MidiKeyPlayer/MidiKeyPlayer.csproj` 的 `<Version>` 与 `更新说明.txt` 第一行的版本号。
+4. 跑 `build-win.sh` 出包。zip 里是 exe 与 `更新日志.txt`。
+5. 跑内置自检，退出码必须是 0。
+6. 跑主窗与键位窗的界面快照，确认能出图。
+7. 提交、推 main、打 tag、建 Release、上传 zip。
 
-打包脚本会核对这两处：日志里没有当前版本号那一节，就拒绝打包。
+```
+pwsh -File tools\release.ps1 -DryRun                        # 只看会发什么
+pwsh -File tools\release.ps1 -Notes "（这一版改了什么）"      # 自己写日志
+pwsh -File tools\release.ps1 -SkipPush                      # 只构建验证，不提交不发布
+pwsh -File tools\release.ps1 -TrimParity                    # 加做裁剪比对
+```
+
+规则：每次发 release 一律发新版本。已经发布的包不动、不覆盖、不重传。
+tag 已存在，脚本直接停手。日志里没有当前版本号那一节，`build-win.sh` 拒绝打包。
 
 发布包开了裁剪，设置写在 `MidiKeyPlayer.csproj` 里。裁剪会让 exe 从 45.6 MB 降到 23.0 MB。
 反射相关的程序集（`MidiKeyPlayer`、`Avalonia` 系列、`Melanchall.DryWetMidi`）用
 `TrimmerRootAssembly` 钉住，类型与成员一个不删。
 
-改发布形态或升级依赖之后，发布前按顺序做这几项：
-
-1. 跑 `bash MidiKeyPlayer/build-win.sh`，记下 exe 与 zip 的字节数。
-2. 跑 `tools/run-selftest.ps1 -ExePath <新 exe>`，退出码必须是 0。
-3. 跑一次界面快照，与上一版比对：
-   设 `MIDIKEY_UI_SNAPSHOT=<png 路径>`、`MIDIKEY_UI_SNAPSHOT_MIX=all`、
-   `MIDIKEY_UI_SNAPSHOT_MIDI=示例MIDI\示例3-铃儿响叮当-三音轨.mid`，再启动 exe。
-   生成的 PNG 与不裁剪版逐字节相同才算通过。
-4. 曲线验证：临时加一个 `TraceProbe.cs` 挂 Avalonia 日志监听器，确认没有绑定错误。
-   做法与负向对照见 `midikey-audit\fixes\58-trim-verify.md`。
+动过裁剪设置或升级依赖之后，发版时加 `-TrimParity`。它会额外构建一份不裁剪的 exe，
+把两张界面快照逐字节比对。比对失败就不发。
+更细的曲线验证（挂 Avalonia 日志监听器查绑定错误）见 `midikey-audit\fixes\58-trim-verify.md`。
 
 ## 自动更新
 
