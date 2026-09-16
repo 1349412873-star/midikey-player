@@ -296,6 +296,38 @@ function Publish-Release([string]$version, [string]$zip, [string]$body) {
     $upload = "https://uploads.github.com/repos/$Repo/releases/$($rel.id)/assets?name=$asset"
     $up = Invoke-RestMethod -Method Post -Uri $upload -Headers $headers -ContentType 'application/zip' -Body $bytes
     Write-Host "   已上传：$($up.name) $($up.size) 字节"
+
+    # 上传后立刻校验：远端资产的 sha256 必须与本地 zip 相同。
+    # 先用上传响应里的 digest；没有就回读资产列表；再没有才下载回来算。
+    $localHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLower()
+    $remoteHash = ''
+    if ($null -ne $up.digest -and $up.digest -match '^sha256:(.+)$') { $remoteHash = $Matches[1].ToLower() }
+    if ([string]::IsNullOrWhiteSpace($remoteHash)) {
+        $assets = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$Repo/releases/$($rel.id)/assets" -Headers $headers
+        foreach ($a in $assets) {
+            if ($a.name -eq $asset -and $null -ne $a.digest -and $a.digest -match '^sha256:(.+)$') {
+                $remoteHash = $Matches[1].ToLower()
+            }
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($remoteHash)) {
+        Write-Host '   远端没给 sha256，下载回来自己算 ...'
+        $probe = Join-Path $env:TEMP "midikey-verify-$version.zip"
+        $lastError = ''
+        for ($i = 1; $i -le 5; $i++) {
+            try {
+                Invoke-WebRequest -Uri $up.browser_download_url -OutFile $probe -UseBasicParsing
+                $remoteHash = (Get-FileHash -LiteralPath $probe -Algorithm SHA256).Hash.ToLower()
+                $lastError = ''
+                break
+            }
+            catch { $lastError = $_.Exception.Message; Start-Sleep -Seconds 3 }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($lastError)) { throw "下载校验失败：$lastError" }
+        Remove-Item -LiteralPath $probe -ErrorAction SilentlyContinue
+    }
+    if ($remoteHash -ne $localHash) { throw "上传的包与本地不一致。本地 $localHash，远端 $remoteHash。" }
+    Write-Host "   校验通过：sha256 $localHash"
     return $rel.html_url
 }
 

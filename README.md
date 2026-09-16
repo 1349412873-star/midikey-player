@@ -282,7 +282,8 @@ THIRD-PARTY-NOTICES.md      # 第三方组件许可声明
 4. 跑 `build-win.sh` 出包。zip 里是 exe 与 `更新日志.txt`。
 5. 跑内置自检，退出码必须是 0。
 6. 跑主窗与键位窗的界面快照，确认能出图。
-7. 提交、推 main、打 tag、建 Release、上传 zip。
+7. 提交、推 main、打 tag、建 Release、上传 zip。上传后比对远端资产的 sha256 与本地 zip，
+   不一致就报错。
 
 ```
 powershell -File tools\release.ps1 -DryRun                     # 只看会发什么
@@ -292,6 +293,7 @@ powershell -File tools\release.ps1 -TrimParity                 # 加做裁剪比
 ```
 
 规则：每次发 release 一律发新版本。已经发布的包不动、不覆盖、不重传。
+发版全程自动，脚本一路做到上传完成，中途不停下来问。
 tag 已存在，脚本直接停手。日志里没有当前版本号那一节，`build-win.sh` 拒绝打包。
 
 发布包开了裁剪，设置写在 `MidiKeyPlayer.csproj` 里。裁剪会让 exe 从 45.6 MB 降到 23.0 MB。

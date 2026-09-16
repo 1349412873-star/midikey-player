@@ -6,8 +6,10 @@
 
 - 每次发 release 一律发新版本。版本号自动加一（默认补丁号 +1）。
 - 已经发布的包不动、不覆盖、不重传。tag 已存在就停手。
-- 发版走脚本：`powershell -File tools\release.ps1`。它按顺序做版本号、日志、构建、自检、
-  界面快照、提交、打 tag、建 Release、传 zip。
+- 发版全自动：构建、自检、界面快照、提交、推 main、打 tag、建 Release、上传 zip 一次做完。
+  不要问用户「要不要发」，也不要停在上传之前。用户改口之前，这就是默认动作。
+- 上传后自动校验：比对远端资产的 sha256 与本地 zip。不一致就报错。
+- 发版走脚本：`powershell -File tools\release.ps1`。
 - 想先看会发什么：`powershell -File tools\release.ps1 -DryRun`。
 - 想只构建不发布：`powershell -File tools\release.ps1 -SkipPush`。
 - 动过裁剪设置或升级依赖之后，加 `-TrimParity`，比对裁剪版与不裁剪版的快照。
