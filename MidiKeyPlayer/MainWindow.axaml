@@ -4,7 +4,8 @@
         x:Class="MidiKeyPlayer.MainWindow"
         Title="MIDI 按键播放器"
         Width="1120" Height="960"
-        MinWidth="980" MinHeight="880"
+        MinWidth="980" MinHeight="820"
+        CanResize="True" CanMaximize="True"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource BrushCanvas}"
         FontFamily="{DynamicResource FontUi}"
@@ -48,6 +49,8 @@
        不这样做的话，按钮是 Fluent 默认的浅灰，颜色与主按钮不一致；放在窗口级资源里也不行 ——
        那里是 StaticResource，解析时不认主题变体，只有一套颜色。 -->
 
+  <!-- 主窗口必须允许拖边和最大化：默认尺寸只提供首次打开时的舒适布局，不能把用户的屏幕高度锁死。
+       820 是卷帘在紧凑布局下仍能保留最基本操作区的下限；超过这个高度由中间的 * 行自动吸收。 -->
   <Grid>
 
     <!-- 左：文件/轨道；右：演奏控制 -->

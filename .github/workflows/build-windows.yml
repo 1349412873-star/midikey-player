@@ -1,0 +1,59 @@
+name: 构建 Windows 发行包
+
+on:
+  # 推送到主分支时自动验证，另保留手动触发入口供以后重新编译同一版本。
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 构建不修改仓库或发布 Release，只需要读取源码的最小权限。
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # 项目产物是 Windows 自包含 exe，必须在 Windows 运行器上发布与打包。
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: 取出源码
+        uses: actions/checkout@v6
+
+      - name: 安装 .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: 恢复 NuGet 依赖
+        run: dotnet restore MidiKeyPlayer/MidiKeyPlayer.csproj
+
+      - name: 发布 Windows 单文件程序
+        run: >
+          dotnet publish MidiKeyPlayer/MidiKeyPlayer.csproj
+          --configuration Release
+          --no-restore
+          --output publish
+
+      - name: 组装下载包
+        run: |
+          $version = [xml](Get-Content -Raw 'MidiKeyPlayer/MidiKeyPlayer.csproj')
+          $version = $version.Project.PropertyGroup.Version | Select-Object -First 1
+          if ([string]::IsNullOrWhiteSpace($version)) { throw '无法从项目文件读取版本号。' }
+
+          $packageDir = 'package'
+          New-Item -ItemType Directory -Force $packageDir | Out-Null
+          Copy-Item 'publish/MidiKeyPlayer.exe' "$packageDir/MidiKeyPlayer.exe"
+          Copy-Item 'MidiKeyPlayer/docs/更新日志.txt' "$packageDir/更新日志.txt"
+          Compress-Archive -Path "$packageDir/*" -DestinationPath "MidiKeyPlayer-win-x64-$version.zip"
+
+      # Artifact 会保留 30 天；它不是 GitHub Release，避免意外对外发布未验证版本。
+      - name: 上传发行包
+        uses: actions/upload-artifact@v4
+        with:
+          name: MidiKeyPlayer-win-x64
+          path: MidiKeyPlayer-win-x64-*.zip
+          if-no-files-found: error
+          retention-days: 30
