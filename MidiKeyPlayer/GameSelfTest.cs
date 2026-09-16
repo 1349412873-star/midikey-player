@@ -75,6 +75,7 @@ internal static class GameSelfTest
             TestPresetBinding();
             TestKeyMapNames();
             TestSolfegeNames();
+            TestFlatModifier();
         }
         catch (Exception ex)
         {
@@ -265,6 +266,44 @@ internal static class GameSelfTest
               Music.SolfegeNames.Length == 128 && Music.SolfegeNames[60] == "1"
               && Music.SolfegeNames[72] == "1\u02D9",
               $"长度 {Music.SolfegeNames.Length}");
+    }
+
+    // ================= 降半音键 =================
+
+    /// <summary>
+    /// 降半音键（v1.0.14 新增）：「异环键位」预设有 Shift 升半音 + Ctrl 降半音；
+    /// 黑键两条路都能到时固定优先升半音；最低键下面那一个半音只能用降半音；
+    /// 只绑降半音键的方案用「上方邻键 + 降半音」补黑键。
+    /// </summary>
+    private static void TestFlatModifier()
+    {
+        var p = KeymapProfile.PresetByName("异环键位");
+        Check("降半音：异环键位预设存在且半音键绑对",
+              p != null && p.Sharp == "Shift" && p.Flat == "Ctrl" && p.ModifiersEnabled,
+              p == null ? "取不到" : $"Sharp=「{p.Sharp}」 Flat=「{p.Flat}」 开关={p.ModifiersEnabled}");
+        if (p == null) return;
+
+        // 音域：低音 do（48）被 Ctrl 向下多扩一个半音到 47；最高仍是高音 si+升半音 = 84
+        Check("降半音：音域向下多扩一个半音",
+              p.ResolveMinNote() == 47 && p.ResolveMaxNote() == 84,
+              $"实际 {p.ResolveMinNote()}..{p.ResolveMaxNote()}");
+
+        // 黑键（61 = 中音 #1）：升半音优先 → A(60) + Shift，不用 Ctrl
+        bool okSharp = p.TryKeyOfPitch(61, out string k61, out _, out bool s61, out bool f61, out _)
+                       && k61 == "A" && s61 && !f61;
+        Check("降半音：黑键固定优先升半音", okSharp, $"61 → {k61} 升={s61} 降={f61}");
+
+        // 最低键下面那一个半音（47）：升半音够不到，用 低音 do(Z, 48) + Ctrl
+        bool okLow = p.TryKeyOfPitch(47, out string k47, out _, out bool s47, out bool f47, out _)
+                     && k47 == "Z" && !s47 && f47;
+        Check("降半音：最低键下面半音用降半音", okLow, $"47 → {k47} 升={s47} 降={f47}");
+
+        // 只绑降半音键的方案：黑键用「上方邻键 + 降半音」（61 = 中音 re(S, 62) + Ctrl）
+        var onlyFlat = p.Clone();
+        onlyFlat.Sharp = null;
+        bool okOnly = onlyFlat.TryKeyOfPitch(61, out string k61b, out _, out bool s61b, out bool f61b, out _)
+                      && k61b == "S" && !s61b && f61b;
+        Check("降半音：没绑升半音时用上方邻键", okOnly, $"61 → {k61b} 升={s61b} 降={f61b}");
     }
 
     // ================= 断言 =================

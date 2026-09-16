@@ -2964,6 +2964,7 @@ public partial class MainWindow : Window
         if (map.Low) parts.Add("+降八度键");
         if (map.High) parts.Add("+升八度键");
         if (map.Sharp) parts.Add("+升半音键");
+        if (map.Flat) parts.Add("+降半音键");
         return string.Join("", parts);
     }
 

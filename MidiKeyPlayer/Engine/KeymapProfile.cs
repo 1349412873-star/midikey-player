@@ -82,6 +82,15 @@ public sealed class KeymapProfile
     public string? Sharp { get; set; } = "MouseMiddle";
 
     /// <summary>
+    /// 降半音键（JSON 里写 <c>flat</c>）。按住它再按音键，发出的音低半音 ——
+    /// 与升半音键对称：升半音用「下方邻键 + 升半音」，降半音用「上方邻键 + 降半音」。
+    /// 同一个黑键两条路都能到时，固定优先升半音键（规则见 <see cref="TryKeyOfPitch(int, out string, out int, out bool, out bool, out int)"/>）；
+    /// 降半音键因此主要用在两处：方案没绑升半音键时补半音、把音域向下多扩一个半音。
+    /// 老方案文件没有这个字段，读进来是 null（按没绑处理）。
+    /// </summary>
+    public string? Flat { get; set; }
+
+    /// <summary>
     /// 是否启用功能键（八度键与升半音键）。界面上的勾选框「启用功能键」。
     /// 不勾时：功能键区块的输入禁用，引擎按「没有修饰键」处理 ——
     /// 超出键位范围的音直接不发声，不做八度折叠。默认启用。
@@ -284,6 +293,25 @@ public sealed class KeymapProfile
     }
 
     /// <summary>
+    /// 第 5 套（异环键位）：键位与「21 键半音」完全相同（三行七列自然音，低 / 中 / 高三个八度），
+    /// 修饰键多一个降半音：按住 Shift 升半音、按住 Ctrl 降低半音。
+    /// 同一个黑键两条路都能到时固定用 Shift（升半音优先，规则见 TryKeyOfPitch）；
+    /// Ctrl 额外把音域向下多扩一个半音（最低键 低音 do 下面那一个半音）。
+    /// 能弹 47..84。
+    /// </summary>
+    private static KeymapProfile BuildChromatic21Flat()
+    {
+        var p = BuildChromatic21();
+        p.Name = "异环键位";
+        p.Sharp = "Shift";
+        p.Flat = "Ctrl";
+        p.Description = "三行七列自然音，三行是低音 / 中音 / 高音三个八度："
+                      + "Z X C V B N M 是低音 do..si，A S D F G H J 是中音 do..si，Q W E R T Y U 是高音 do..si；"
+                      + "按住 Shift 升半音，按住 Ctrl 降低半音";
+        return p;
+    }
+
+    /// <summary>
     /// 方案名：「N 键 M 排 K 个八度」。
     /// N = 键位数；M = 这些键在物理键盘上占几排；K = 能弹音域的八度数（向上取整）。
     /// K 由「键位 × 八度键」能到达的音高张角算出，升半音键只在音域内补半音，不扩展边界。
@@ -343,7 +371,7 @@ public sealed class KeymapProfile
     }
 
     /// <summary>
-    /// 4 套内置预设，名字直接写死成直白的中文（不再由 <see cref="SchemeNameOf"/> 拼几何量）。
+    /// 5 套内置预设，名字直接写死成直白的中文（不再由 <see cref="SchemeNameOf"/> 拼几何量）。
     /// 第 1 套的名字必须等于 <see cref="DefaultName"/>，不等就写日志。
     /// 第 3 套的用户可见名字由用户指定，键位与旧的「36 键半音三排」相同（见 <see cref="LegacyPresetAlias"/>）。
     /// </summary>
@@ -355,6 +383,7 @@ public sealed class KeymapProfile
             Preset(BuildChromatic21(), "21 键半音"),           // 第 2 套：低 / 中 / 高三个八度自然音 + Shift 升半音
             Preset(BuildChromatic36(), "第五人格键位"),         // 第 3 套：三排各 12 个半音
             Preset(BuildChromatic8(), "8 键半音"),             // 第 4 套：一排 8 键 do..高音 do + 鼠标三键
+            Preset(BuildChromatic21Flat(), "异环键位"),         // 第 5 套：同 21 键半音 + Shift 升半音 / Ctrl 降半音
         };
         if (!string.Equals(list[0].Name, DefaultName, StringComparison.Ordinal))
             LogFile.Append($"[键位] 默认方案名是「{list[0].Name}」，与常量「{DefaultName}」不同，请同步。");
@@ -740,6 +769,7 @@ public sealed class KeymapProfile
                      (profile.OctaveUp, "octaveUp"),
                      (profile.OctaveDown, "octaveDown"),
                      (profile.Sharp, "sharp"),
+                     (profile.Flat, "flat"),
                  })
         {
             if (string.IsNullOrWhiteSpace(name)) continue;
@@ -789,10 +819,11 @@ public sealed class KeymapProfile
     /// <summary>基准音所在的八度编号（C4 = 4）。</summary>
     public int BaseOctave => BaseNote / 12 - 1;
 
-    /// <summary>本方案能不能用修饰键（八度键与升半音键）。总开关关掉就一律按没有处理。</summary>
+    /// <summary>本方案能不能用修饰键（八度键与半音键）。总开关关掉就一律按没有处理。</summary>
     public bool CanUseOctaveUp => ModifiersEnabled && !string.IsNullOrWhiteSpace(OctaveUp);
     public bool CanUseOctaveDown => ModifiersEnabled && !string.IsNullOrWhiteSpace(OctaveDown);
     public bool CanUseSharp => ModifiersEnabled && !string.IsNullOrWhiteSpace(Sharp);
+    public bool CanUseFlat => ModifiersEnabled && !string.IsNullOrWhiteSpace(Flat);
 
     /// <summary>可演奏最低音：所有键位配上八度键能到的最低音。</summary>
     public int ResolveMinNote() => ReachableExtent().Lo;
@@ -819,6 +850,7 @@ public sealed class KeymapProfile
         bool canUp = CanUseOctaveUp;
         bool canDown = CanUseOctaveDown;
         bool canSharp = CanUseSharp;
+        bool canFlat = CanUseFlat;
 
         foreach (var k in Keys)
         {
@@ -830,8 +862,10 @@ public sealed class KeymapProfile
                 if (mod < 0 && !canDown) continue;
                 if (mod > 0 && !canUp) continue;
 
-                int low = BaseNote + k.Offset + 12 * mod;
-                int high = canSharp ? low + 1 : low;
+                // 降半音键向下多到一个半音，升半音键向上多到一个半音
+                int baseP = BaseNote + k.Offset + 12 * mod;
+                int low = canFlat ? baseP - 1 : baseP;
+                int high = canSharp ? baseP + 1 : baseP;
                 if (!any) { lo = low; hi = high; any = true; continue; }
                 if (low < lo) lo = low;
                 if (high > hi) hi = high;
@@ -850,6 +884,7 @@ public sealed class KeymapProfile
         bool canUp = CanUseOctaveUp;
         bool canDown = CanUseOctaveDown;
         bool canSharp = CanUseSharp;
+        bool canFlat = CanUseFlat;
 
         foreach (var k in Keys)
         {
@@ -862,8 +897,11 @@ public sealed class KeymapProfile
                 if (mod > 0 && !canUp) continue;
 
                 int low = BaseNote + k.Offset + 12 * mod;
-                for (int s = 0; s <= (canSharp ? 1 : 0); s++)
+                // s = 0 原键、+1 升半音、-1 降半音
+                for (int s = -1; s <= 1; s++)
                 {
+                    if (s > 0 && !canSharp) continue;
+                    if (s < 0 && !canFlat) continue;
                     int p = low + s;
                     if (p >= 0 && p <= 127) set.Add(p);
                 }
@@ -909,32 +947,47 @@ public sealed class KeymapProfile
     /// 功能键总开关关掉时，八度档只有 0，也不会有升半音键。
     /// </summary>
     public bool TryKeyOfPitch(int pitch, out string key, out int octaveOffset, out bool sharp)
-        => TryKeyOfPitch(pitch, out key, out octaveOffset, out sharp, out _);
+        => TryKeyOfPitch(pitch, out key, out octaveOffset, out sharp, out _, out _);
 
     /// <summary>同上，另给出实际发声音高（命中时与入参相同）。</summary>
     public bool TryKeyOfPitch(int pitch, out string key, out int octaveOffset, out bool sharp,
                               out int soundingPitch)
+        => TryKeyOfPitch(pitch, out key, out octaveOffset, out sharp, out _, out soundingPitch);
+
+    /// <summary>
+    /// 完整版：另给出 <paramref name="flat"/>（要不要按住降半音键，与 <paramref name="sharp"/> 互斥）。
+    /// 候选优先顺序固定：不用半音键 → 用升半音键 → 用降半音键 → 键偏移小 → 八度档绝对值小 → 键表里靠前。
+    /// 也就是说同一个黑键「下方白键 + 升半音」与「上方白键 + 降半音」都能到时，固定用升半音；
+    /// 降半音键负责的是：方案没绑升半音键时补半音，以及最低键下面那一个半音（升半音够不到）。
+    /// </summary>
+    public bool TryKeyOfPitch(int pitch, out string key, out int octaveOffset,
+                              out bool sharp, out bool flat, out int soundingPitch)
     {
         key = "";
         octaveOffset = 0;
         sharp = false;
+        flat = false;
         soundingPitch = pitch;
         if (Keys.Count == 0) return false;
         if (!InRange(pitch)) return false;   // 超出能弹范围：固定不弹
 
         int want = pitch;
         bool canSharp = CanUseSharp;
+        bool canFlat = CanUseFlat;
         bool canUp = CanUseOctaveUp;
         bool canDown = CanUseOctaveDown;
 
+        // 半音键优先级：0 不用、1 升半音、2 降半音（数值小的优先）
+        static int RankOf(int s) => s == 0 ? 0 : (s > 0 ? 1 : 2);
+
         bool found = false;
-        int bestSharp = 1;
+        int bestRank = int.MaxValue;
         int bestOffset = int.MaxValue;
         int bestModAbs = int.MaxValue;
         int bestIndex = int.MaxValue;
         string bestKey = "";
         int bestMod = 0;
-        bool bestSharpFlag = false;
+        int bestS = 0;
 
         for (int mod = -1; mod <= 1; mod++)
         {
@@ -948,28 +1001,30 @@ public sealed class KeymapProfile
                 if (KeyCharOf(kb.Key) == '\0') continue;   // 认不出的键名不参与映射
 
                 int basePitch = BaseNote + kb.Offset + 12 * mod;
-                int maxS = canSharp ? 1 : 0;
-                for (int s = 0; s <= maxS; s++)
+                for (int s = -1; s <= 1; s++)
                 {
+                    if (s > 0 && !canSharp) continue;
+                    if (s < 0 && !canFlat) continue;
                     int p = basePitch + s;
                     if (p != want) continue;               // 只认精确命中：没键就不发声
 
+                    int rank = RankOf(s);
                     bool better =
                         !found ||
-                        s < bestSharp ||
-                        (s == bestSharp && kb.Offset < bestOffset) ||
-                        (s == bestSharp && kb.Offset == bestOffset && Math.Abs(mod) < bestModAbs) ||
-                        (s == bestSharp && kb.Offset == bestOffset && Math.Abs(mod) == bestModAbs && i < bestIndex);
+                        rank < bestRank ||
+                        (rank == bestRank && kb.Offset < bestOffset) ||
+                        (rank == bestRank && kb.Offset == bestOffset && Math.Abs(mod) < bestModAbs) ||
+                        (rank == bestRank && kb.Offset == bestOffset && Math.Abs(mod) == bestModAbs && i < bestIndex);
                     if (!better) continue;
 
                     found = true;
-                    bestSharp = s;
+                    bestRank = rank;
                     bestOffset = kb.Offset;
                     bestModAbs = Math.Abs(mod);
                     bestIndex = i;
                     bestKey = kb.Key;
                     bestMod = mod;
-                    bestSharpFlag = s == 1;
+                    bestS = s;
                 }
             }
         }
@@ -978,7 +1033,8 @@ public sealed class KeymapProfile
 
         key = bestKey;
         octaveOffset = bestMod;
-        sharp = bestSharpFlag;
+        sharp = bestS > 0;
+        flat = bestS < 0;
         soundingPitch = want;
         return true;
     }
@@ -996,6 +1052,7 @@ public sealed class KeymapProfile
             OctaveUp = OctaveUp,
             OctaveDown = OctaveDown,
             Sharp = Sharp,
+            Flat = Flat,
             ModifiersEnabled = ModifiersEnabled,
             MinNote = MinNote,
             MaxNote = MaxNote,

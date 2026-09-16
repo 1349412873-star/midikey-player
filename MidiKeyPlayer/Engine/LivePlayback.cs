@@ -8,7 +8,7 @@ namespace MidiKeyPlayer.Engine;
 /// <paramref name="Key"/> 是方案里的键名（"Z" / "," / "PageUp" / "MouseLeft"）。
 /// </summary>
 public readonly record struct LiveMapping(
-    bool Playable, string Key, bool Low, bool High, bool Sharp, string Reason)
+    bool Playable, string Key, bool Low, bool High, bool Sharp, bool Flat, string Reason)
 {
     /// <summary>给人看的按键名：逗号写成全角，鼠标键写成中文。</summary>
     public string KeyLabel => string.IsNullOrEmpty(Key) ? "" : Key switch
@@ -85,6 +85,7 @@ public sealed class LivePlayback : IDisposable
     // —— 修饰键状态机（锁内访问）——
     private string? _modKey;               // 当前按住的八度修饰键（方案里的键名）
     private bool _modSharp;                // 当前是否按着升半音键
+    private bool _modFlat;                 // 当前是否按着降半音键
 
     // —— 输出时间线游标（锁内访问）——
     private double _lastDownAt = double.NegativeInfinity;   // 最后一次音键按下时刻
@@ -165,16 +166,16 @@ public sealed class LivePlayback : IDisposable
     {
         int shifted = pitch - 12 * (baseOctave - profile.BaseOctave);
 
-        if (profile.TryKeyOfPitch(shifted, out string key, out int offset, out bool sharp, out _))
-            return new LiveMapping(true, key, offset < 0, offset > 0, sharp, "");
+        if (profile.TryKeyOfPitch(shifted, out string key, out int offset, out bool sharp, out bool flat, out _))
+            return new LiveMapping(true, key, offset < 0, offset > 0, sharp, flat, "");
 
         var (lo, hi) = PlayableRange(baseOctave, profile);
         if (!profile.InRange(shifted))
         {
-            return new LiveMapping(false, "", false, false, false,
+            return new LiveMapping(false, "", false, false, false, false,
                 $"超出音域（本档可演奏 {Music.SolfegeRange(lo, hi)}，可用基准八度或移调调整）");
         }
-        return new LiveMapping(false, "", false, false, false,
+        return new LiveMapping(false, "", false, false, false, false,
             "键表里没有这个音（没有对应键的音直接跳过），可在方案里加一个键");
     }
 
@@ -259,6 +260,7 @@ public sealed class LivePlayback : IDisposable
             _sounding.Clear();
             _modKey = null;
             _modSharp = false;
+            _modFlat = false;
             _lastDownAt = _lastKeyUpAt = _lastUpAt = double.NegativeInfinity;
             _thread = new Thread(Worker) { IsBackground = true, Name = "LivePlayback" };
             _thread.Start();
@@ -360,6 +362,13 @@ public sealed class LivePlayback : IDisposable
                 if (map.Sharp) Enqueue(Math.Max(now, minDown - modLead), sharpKey, true);
                 _modSharp = map.Sharp;
             }
+            string? flatKey = ModKeyOrNull(profile.Flat, profile);
+            if (_modFlat != map.Flat && flatKey != null)
+            {
+                if (_modFlat) Enqueue(now, flatKey, false);
+                if (map.Flat) Enqueue(Math.Max(now, minDown - modLead), flatKey, true);
+                _modFlat = map.Flat;
+            }
 
             double downAt = minDown;
             var note = new Sounding
@@ -407,6 +416,8 @@ public sealed class LivePlayback : IDisposable
             foreach (var s in _sounding.Where(x => !x.Released).ToList()) ReleaseNote(s, now, retrigger: false);
             string? sharpKey = ModKeyOrNull(Keymap.Sharp, Keymap);
             if (_modSharp && sharpKey != null) { Enqueue(now, sharpKey, false); _modSharp = false; }
+            string? flatKey = ModKeyOrNull(Keymap.Flat, Keymap);
+            if (_modFlat && flatKey != null) { Enqueue(now, flatKey, false); _modFlat = false; }
             if (_modKey is { Length: > 0 } m) { Enqueue(now, m, false); _modKey = null; }
             _wake.Release();
         }

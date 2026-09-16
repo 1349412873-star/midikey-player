@@ -20,6 +20,9 @@ public sealed class MappedNote
     /// <summary>true → 需要按住升半音键。功能键关掉或键表里没有升半音键时恒为 false。</summary>
     public bool Sharp { get; init; }
 
+    /// <summary>true → 需要按住降半音键（与 <see cref="Sharp"/> 互斥；只有方案绑了降半音键时才可能出现）。</summary>
+    public bool Flat { get; init; }
+
     /// <summary>八度档位：相对方案基准音所在八度的偏移（-1 / 0 / +1）。</summary>
     public int OctaveOffset { get; init; }
 
@@ -176,7 +179,8 @@ public static class NoteMapper
                 continue;
             }
 
-            if (!profile.TryKeyOfPitch(want, out string keyName, out int octaveOffset, out bool sharp))
+            if (!profile.TryKeyOfPitch(want, out string keyName, out int octaveOffset,
+                                       out bool sharp, out bool flat, out _))
             {
                 result.Notes.Add(Skipped(p, n, "键表里没有这个音（没有对应键的音直接跳过）"));
                 continue;
@@ -190,6 +194,7 @@ public static class NoteMapper
                 Key = KeymapProfile.KeyCharOf(keyName),
                 KeyName = keyName,
                 Sharp = sharp,
+                Flat = flat,
                 OctaveOffset = octaveOffset,
                 SoundingPitch = p,
                 InRange = true,
@@ -345,9 +350,12 @@ public static class NoteMapper
         string sharpName = string.IsNullOrWhiteSpace(profile.Sharp) || !profile.ModifiersEnabled
             ? "升半音键" : profile.Sharp!;
         string sharp = n.Sharp ? $"{sharpName}+升半音 " : "";
+        string flatName = string.IsNullOrWhiteSpace(profile.Flat) || !profile.ModifiersEnabled
+            ? "降半音键" : profile.Flat!;
+        string flat = n.Flat ? $"{flatName}+降半音 " : "";
         string fold = n.Shifted ? $"（改弹 {Music.SolfegeName(n.SoundingPitch)}）" : "";
         string time = withTime ? $"{n.Start:F2}s " : "";
-        return $"{time}{Music.SolfegeName(n.Pitch)}{fold} → 按[{keyShow}] {sharp}{slot}";
+        return $"{time}{Music.SolfegeName(n.Pitch)}{fold} → 按[{keyShow}] {sharp}{flat}{slot}";
     }
 
     /// <summary>八度档位的中文名，给跳过原因与音高描述用。</summary>

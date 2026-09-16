@@ -281,12 +281,12 @@ public sealed partial class SettingsWindow : Window, INotifyPropertyChanged
 
     private void FillFuncRows()
     {
-        string?[] values = { _keymap.OctaveUp, _keymap.OctaveDown, _keymap.Sharp };
-        string[] tags = { "up", "down", "sharp" };
-        string[] labels = { "升高八度", "降低八度", "升半音" };
+        string?[] values = { _keymap.OctaveUp, _keymap.OctaveDown, _keymap.Sharp, _keymap.Flat };
+        string[] tags = { "up", "down", "sharp", "flat" };
+        string[] labels = { "升高八度", "降低八度", "升半音", "降低半音" };
 
         _funcs.Clear();
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < 4; i++)
         {
             string key = values[i] ?? "";
             _funcs.Add(new FuncRowVM
@@ -743,6 +743,7 @@ public sealed partial class SettingsWindow : Window, INotifyPropertyChanged
                 case "up": _keymap.OctaveUp = canonical; break;
                 case "down": _keymap.OctaveDown = canonical; break;
                 case "sharp": _keymap.Sharp = canonical; break;
+                case "flat": _keymap.Flat = canonical; break;
             }
             func.Key = canonical;
             func.KeyText = DisplayKeyText(canonical);
@@ -1098,8 +1099,8 @@ public sealed partial class SettingsWindow : Window, INotifyPropertyChanged
         FuncPanel.IsEnabled = on;
         RebuildRows();   // 音域跟着变，行分组与统计都要重算
         Apply(on
-            ? "功能键已启用：八度键与升半音键照方案里的绑定生效。"
-            : "功能键已关闭：三个功能键都不生效，超出键位范围的音直接不发声。");
+            ? "功能键已启用：八度键与半音键照方案里的绑定生效。"
+            : "功能键已关闭：四个功能键都不生效，超出键位范围的音直接不发声。");
     }
 
     // ================= 功能键 =================
@@ -1120,6 +1121,7 @@ public sealed partial class SettingsWindow : Window, INotifyPropertyChanged
             case "up": _keymap.OctaveUp = ""; break;
             case "down": _keymap.OctaveDown = ""; break;
             case "sharp": _keymap.Sharp = ""; break;
+            case "flat": _keymap.Flat = ""; break;
         }
         row.Key = "";
         row.KeyText = "";
@@ -1483,7 +1485,7 @@ public sealed partial class SettingsWindow : Window, INotifyPropertyChanged
             string name = KeymapProfile.CanonicalKeyName(k.Key);
             if (name.Length > 0) set.Add(name);
         }
-        foreach (string? m in new[] { _keymap.OctaveUp, _keymap.OctaveDown, _keymap.Sharp })
+        foreach (string? m in new[] { _keymap.OctaveUp, _keymap.OctaveDown, _keymap.Sharp, _keymap.Flat })
         {
             string name = KeymapProfile.CanonicalKeyName(m);
             if (name.Length > 0) set.Add(name);

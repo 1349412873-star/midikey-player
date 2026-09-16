@@ -27,22 +27,22 @@ public sealed class PlaybackEngine : IDisposable
         public readonly int Kind;
         public readonly char Code;
         public readonly string Name;
-        public readonly bool IsSharp;      // 修饰键专用：true = 升半音键，false = 八度键
+        public readonly int Slot;          // 修饰键专用：0 = 八度键，1 = 升半音键，2 = 降半音键
         public readonly bool Down;
         public readonly string Label;
 
-        private PhysicalEvent(double t, int kind, char code, string name, bool isSharp, bool down, string label)
+        private PhysicalEvent(double t, int kind, char code, string name, int slot, bool down, string label)
         {
-            T = t; Kind = kind; Code = code; Name = name; IsSharp = isSharp; Down = down; Label = label;
+            T = t; Kind = kind; Code = code; Name = name; Slot = slot; Down = down; Label = label;
         }
 
         /// <summary>音键事件。</summary>
         public static PhysicalEvent Key(double t, char code, bool down, string label)
-            => new(t, K_Key, code, "", false, down, label);
+            => new(t, K_Key, code, "", 0, down, label);
 
-        /// <summary>修饰键事件（八度 / 升半音）。</summary>
-        public static PhysicalEvent Modifier(double t, string name, bool sharp, bool down)
-            => new(t, K_Modifier, ' ', name, sharp, down, "");
+        /// <summary>修饰键事件（八度 / 升半音 / 降半音，slot 见 <see cref="Slot"/>）。</summary>
+        public static PhysicalEvent Modifier(double t, string name, int slot, bool down)
+            => new(t, K_Modifier, ' ', name, slot, down, "");
     }
 
     private const int K_Key = 0;
@@ -573,16 +573,18 @@ public sealed class PlaybackEngine : IDisposable
                     Probe.OnNoteOff(ev.Code, ev.T);
                 }
                 break;
-            default:   // K_Modifier：八度键或升半音键，键盘键与鼠标键都走同一个键名入口
+            default:   // K_Modifier：八度键或半音键，键盘键与鼠标键都走同一个键名入口
                 if (!Silent)
                 {
                     if (ev.Down) InputSender.KeyDown(ev.Name);
                     else InputSender.KeyUp(ev.Name);
                 }
-                if (ev.IsSharp)
-                    _physSharpKey = ev.Down ? ev.Name : null;
-                else
-                    _physOctKey = ev.Down ? ev.Name : null;
+                switch (ev.Slot)
+                {
+                    case 1: _physSharpKey = ev.Down ? ev.Name : null; break;
+                    case 2: _physFlatKey = ev.Down ? ev.Name : null; break;
+                    default: _physOctKey = ev.Down ? ev.Name : null; break;
+                }
                 Probe.OnModifier(ev.T, ev.Down);
                 break;
         }
@@ -600,9 +602,9 @@ public sealed class PlaybackEngine : IDisposable
     /// 修饰键的真实按下状态（键名；null = 没按）。避免"我以为按着"与目标程序实际状态不一致。
     /// 修饰键可以绑键盘键（PageUp / Shift / O）也可以绑鼠标键（MouseLeft …），所以记键名。
     /// </summary>
-    private readonly record struct ModState(string? OctaveKey, string? SharpKey)
+    private readonly record struct ModState(string? OctaveKey, string? SharpKey, string? FlatKey)
     {
-        public static ModState None => new(null, null);
+        public static ModState None => new(null, null, null);
     }
 
     /// <summary>音键当前是否真的处于按下状态（供停止/跳转后与目标程序对表）。</summary>
@@ -611,10 +613,12 @@ public sealed class PlaybackEngine : IDisposable
     private string? _physOctKey;
     /// <summary>当前真实按着的升半音修饰键名（null = 没按）。</summary>
     private string? _physSharpKey;
+    /// <summary>当前真实按着的降半音修饰键名（null = 没按）。</summary>
+    private string? _physFlatKey;
 
     private ModState CurrentModifiers()
     {
-        lock (_gate) return new ModState(_physOctKey, _physSharpKey);
+        lock (_gate) return new ModState(_physOctKey, _physSharpKey, _physFlatKey);
     }
 
     /// <summary>
@@ -625,15 +629,19 @@ public sealed class PlaybackEngine : IDisposable
     /// </summary>
     private ModState ReadModifierStateAt(int idx)
     {
-        string? oct = null, sharp = null;
+        string? oct = null, sharp = null, flat = null;
         for (int i = 0; i < idx && i < _events.Count; i++)
         {
             var e = _events[i];
             if (e.Kind != K_Modifier) continue;
-            if (e.IsSharp) sharp = e.Down ? e.Name : null;
-            else oct = e.Down ? e.Name : null;
+            switch (e.Slot)
+            {
+                case 1: sharp = e.Down ? e.Name : null; break;
+                case 2: flat = e.Down ? e.Name : null; break;
+                default: oct = e.Down ? e.Name : null; break;
+            }
         }
-        return new ModState(oct, sharp);
+        return new ModState(oct, sharp, flat);
     }
 
     /// <summary>
@@ -652,6 +660,11 @@ public sealed class PlaybackEngine : IDisposable
         {
             if (!Silent) InputSender.KeyDown(sharp);
             _physSharpKey = sharp;
+        }
+        if (mods.FlatKey is { Length: > 0 } flat)
+        {
+            if (!Silent) InputSender.KeyDown(flat);
+            _physFlatKey = flat;
         }
     }
 
@@ -687,6 +700,7 @@ public sealed class PlaybackEngine : IDisposable
         InputSender.ReleaseEverything();
         _physOctKey = null;
         _physSharpKey = null;
+        _physFlatKey = null;
     }
 
     /// <summary>
@@ -757,13 +771,15 @@ public sealed class PlaybackEngine : IDisposable
         double minUpT = (Timing.FrameMs / 1000.0 + 0.001) * scale;
 
         // —— 修饰键状态机（起点 = 目标程序侧当前真实状态）——
-        // 方案里的八度/升半音键可以是键盘键（PageUp / Shift / O），也可以是鼠标键（MouseLeft …）。
+        // 方案里的八度/半音键可以是键盘键（PageUp / Shift / O），也可以是鼠标键（MouseLeft …）。
         var profile = KeymapProfile.Current;
         string? octUpKey = KeyOrNull(profile.OctaveUp);
         string? octDownKey = KeyOrNull(profile.OctaveDown);
         string? sharpKey = KeyOrNull(profile.Sharp);
+        string? flatKey = KeyOrNull(profile.Flat);
         string? heldOct = startMods.OctaveKey;
         string? heldSharp = startMods.SharpKey;
+        string? heldFlat = startMods.FlatKey;
 
         // 起点若还按着音键（上一轮中断残留），先松开
         if (_physHeldKey != '\0')
@@ -772,30 +788,40 @@ public sealed class PlaybackEngine : IDisposable
             _physHeldKey = '\0';
         }
 
-        void EmitModifiers(string? wantOct, bool wantM, double modT)
+        void EmitModifiers(string? wantOct, bool wantS, bool wantF, double modT)
         {
             // 顺序固定：先松开所有不该按的，再按下所有该按的。
             // 这样即便同刻也不依赖排序稳定性，且半音切换时"松"先于"按"。
             if (heldOct != null && heldOct != wantOct)
             {
-                evs.Add(PhysicalEvent.Modifier(modT, heldOct, sharp: false, down: false));
+                evs.Add(PhysicalEvent.Modifier(modT, heldOct, 0, down: false));
                 heldOct = null;
             }
-            if (heldSharp != null && !wantM)
+            if (heldSharp != null && !wantS)
             {
-                evs.Add(PhysicalEvent.Modifier(modT, heldSharp, sharp: true, down: false));
+                evs.Add(PhysicalEvent.Modifier(modT, heldSharp, 1, down: false));
                 heldSharp = null;
+            }
+            if (heldFlat != null && !wantF)
+            {
+                evs.Add(PhysicalEvent.Modifier(modT, heldFlat, 2, down: false));
+                heldFlat = null;
             }
 
             if (wantOct != null && heldOct != wantOct)
             {
-                evs.Add(PhysicalEvent.Modifier(modT, wantOct, sharp: false, down: true));
+                evs.Add(PhysicalEvent.Modifier(modT, wantOct, 0, down: true));
                 heldOct = wantOct;
             }
-            if (wantM && heldSharp == null && sharpKey != null)
+            if (wantS && heldSharp == null && sharpKey != null)
             {
-                evs.Add(PhysicalEvent.Modifier(modT, sharpKey, sharp: true, down: true));
+                evs.Add(PhysicalEvent.Modifier(modT, sharpKey, 1, down: true));
                 heldSharp = sharpKey;
+            }
+            if (wantF && heldFlat == null && flatKey != null)
+            {
+                evs.Add(PhysicalEvent.Modifier(modT, flatKey, 2, down: true));
+                heldFlat = flatKey;
             }
         }
 
@@ -824,8 +850,10 @@ public sealed class PlaybackEngine : IDisposable
 
             // 本音需要的修饰键状态：八度档位 -1 = 按「降八度」键，+1 = 按「升八度」键，0 = 都不按
             string? wantOct = n.OctaveOffset < 0 ? octDownKey : (n.OctaveOffset > 0 ? octUpKey : null);
-            bool wantM = n.Sharp && sharpKey != null;   // 方案里没绑升半音键时不可能真的要按
+            bool wantS = n.Sharp && sharpKey != null;   // 方案里没绑升半音键时不可能真的要按
+            bool wantF = n.Flat && flatKey != null;     // 降半音同理（Sharp 与 Flat 互斥，不会同时要）
             bool sharpHeld = heldSharp != null && heldSharp == sharpKey;
+            bool flatHeld = heldFlat != null && heldFlat == flatKey;
 
             // ② 同一根音键的重触发间隔（旧版只给 12ms，短于一帧 → 两音粘连）
             double downT = t;
@@ -862,10 +890,10 @@ public sealed class PlaybackEngine : IDisposable
             }
 
             // ④ 修饰键切换：提前 modLead 发出，并保证音键至少晚于一帧
-            if (wantOct != heldOct || wantM != sharpHeld)
+            if (wantOct != heldOct || wantS != sharpHeld || wantF != flatHeld)
             {
                 double modT = Math.Max(0, downT - modLead);
-                EmitModifiers(wantOct, wantM, modT);
+                EmitModifiers(wantOct, wantS, wantF, modT);
                 if (downT < modT + frame) downT = modT + frame;
             }
 
