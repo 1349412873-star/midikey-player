@@ -244,8 +244,7 @@ function Invoke-Snapshot([string]$exe, [string]$tag) {
         if (-not (Test-Path -LiteralPath $f)) { throw "快照没出图：$f" }
         if ((Get-Item -LiteralPath $f).Length -lt 10000) { throw "快照太小，可能是空白：$f" }
     }
-    Write-Host "   主窗 $((Get-Item $main).Length) 字节；键位窗 $((Get-Item $keymap).Length) 字节；" +
-                "高级窗 $((Get-Item $advanced).Length) 字节；深色主窗 $((Get-Item $dark).Length) 字节"
+    Write-Host ("   主窗 " + (Get-Item $main).Length + " 字节；键位窗 " + (Get-Item $keymap).Length + " 字节；高级窗 " + (Get-Item $advanced).Length + " 字节；深色主窗 " + (Get-Item $dark).Length + " 字节")
     return @{ Main = $main; Keymap = $keymap; Advanced = $advanced; Dark = $dark }
 }
 
