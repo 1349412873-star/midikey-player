@@ -2590,7 +2590,7 @@ public partial class MainWindow : Window
     {
         if (ChkOverlay.IsChecked != true) return;
         var w = EnsureOverlay();
-        w.ShowProgress(eng.ElapsedSeconds, eng.TotalSeconds, eng.CurrentNote, eng.LoopCount, eng.IsPaused);
+        w.ShowProgress(eng.ElapsedSeconds, eng.TotalSeconds, eng.LoopCount, eng.IsPaused);
         w.RestorePosition(_cfg?.OverlayX ?? -1, _cfg?.OverlayY ?? -1);
     }
 
@@ -3282,6 +3282,8 @@ public partial class MainWindow : Window
             ShowOverlayProgress(eng);   // 悬浮窗跟随（含「已暂停」状态；开关关掉时内部直接返回）
         };
         _uiTimer.Start();
+        if (ChkOverlay.IsChecked == true)
+            EnsureOverlay().SetNotes(_playNotes, engine.TotalSeconds);   // 迷你卷帘的音符
         ShowOverlayProgress(engine);   // 倒计时是 0 秒时这里没有等待期，立刻摆出进度
     }
 
