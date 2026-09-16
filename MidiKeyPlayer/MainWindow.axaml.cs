@@ -1905,20 +1905,9 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// 按资源名取主题画刷（Styles/Theme.axaml 的深浅两套都按主题变体查）。
-    /// 先按当前皮肤查，查不到再不指定变体查一次；都取不到就用中性灰，绝不写字面色值。
+    /// 取不到就用中性灰兜底，绝不写字面色值。
     /// </summary>
-    private static IBrush ResourceBrush(string key)
-    {
-        var app = Application.Current;
-        if (app != null)
-        {
-            if (app.TryFindResource(key, app.ActualThemeVariant, out var themed) && themed is IBrush tb)
-                return tb;
-            if (app.TryFindResource(key, out var any) && any is IBrush ab)
-                return ab;
-        }
-        return FallbackMuted;
-    }
+    private static IBrush ResourceBrush(string key) => ThemeSwitch.BrushOf(key) ?? FallbackMuted;
 
     /// <summary>
     /// 按资源名取字号（Theme.axaml 的字号刻度，唯一真源）。取不到才用 fallback。
@@ -2394,6 +2383,7 @@ public partial class MainWindow : Window
         int mode = ThemeSwitch.Clamp(ThemeCombo.SelectedIndex);
         ThemeSwitch.Apply(mode);
         ApplyThemeColors();
+        _settingsWindow?.RefreshThemeBrushes();   // 键位页的键帽是绑定到资源快照上的，要显式通知
         InsertLog($"皮肤：{ThemeSwitch.Names[mode]}");
 
         // 探针切皮肤只为拍图（见 SetThemeForDev）：不写设置，免得改掉开发机的档位
@@ -2934,8 +2924,7 @@ public partial class MainWindow : Window
     private void SetCountdownChrome(bool on)
     {
         string key = on ? "BrushCountdownChrome" : "BrushCanvas";
-        if (Application.Current?.TryFindResource(key, out var found) == true && found is IBrush b)
-            Background = b;
+        if (ThemeSwitch.BrushOf(key) is { } b) Background = b;
     }
 
     private void StartPlayback()

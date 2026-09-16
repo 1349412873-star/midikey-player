@@ -1,4 +1,6 @@
 using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Media;
 using Avalonia.Styling;
 
 namespace MidiKeyPlayer;
@@ -38,5 +40,23 @@ internal static class ThemeSwitch
     public static void Apply(int mode)
     {
         if (Application.Current is { } app) app.RequestedThemeVariant = VariantOf(mode);
+    }
+
+    /// <summary>
+    /// 按资源名取主题画刷。**必须带上当前主题变体**：颜色住在 ThemeDictionaries 里，
+    /// 不指定变体的查找拿不到它们 —— 拿到 null 的 Foreground 会让键帽文字看不见
+    /// （鼠标悬停时 Fluent 模板会换一个底色，字才露出来），所以这条路径只有这一个入口。
+    /// 取不到就返回 null，调用方自己决定兜底。
+    /// </summary>
+    public static IBrush? BrushOf(string key)
+    {
+        var app = Application.Current;
+        if (app == null) return null;
+        if (app.TryFindResource(key, app.ActualThemeVariant, out var themed) && themed is IBrush tb)
+            return tb;
+        // 兜底：万一日后有人把某个键放到主题字典外面（字号那类不分主题的资源就在外面）
+        if (app.TryFindResource(key, out var any) && any is IBrush ab)
+            return ab;
+        return null;
     }
 }

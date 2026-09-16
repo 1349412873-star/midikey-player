@@ -299,8 +299,18 @@ public sealed partial class SettingsWindow : Window, INotifyPropertyChanged
         }
     }
 
-    // ================= 按键绑定：按行排 =================
+    /// <summary>
+    /// 换皮肤之后把这一页上「代码取过的画刷」全部重取一遍。
+    /// 键帽与功能键的文字色、描边色是绑在 VM 属性上的资源快照，
+    /// 不像 DynamicResource 会自己跟着主题走，所以换主题要显式通知一次。
+    /// </summary>
+    internal void RefreshThemeBrushes()
+    {
+        foreach (var f in _funcs) f.RefreshThemeBrushes();
+        foreach (var r in _rows) r.RefreshThemeBrushes();
+    }
 
+    // ================= 按键绑定：按行排 =================
     /// <summary>
     /// 重建绑定区：把方案里的键位按**方案自己的行号**（<see cref="KeyBinding.Row"/>）分成一行行，
     /// 每行从左到右按音高升序，行号大的显示在上面。
@@ -1744,10 +1754,21 @@ internal abstract class KeyCapRow : INotifyPropertyChanged
     /// <summary>等待态描边色。取现有主题资源，不自造配色。</summary>
     public IBrush? WaitBorderBrush => Waiting ? FindBrush("BrushAccent") : null;
 
-    protected static IBrush? FindBrush(string key) =>
-        Application.Current != null && Application.Current.TryFindResource(key, out object? brush) && brush is IBrush b
-            ? b
-            : null;
+    /// <summary>
+    /// 按资源名取主题画刷。走 <see cref="ThemeSwitch.BrushOf"/>：颜色住在主题字典里，
+    /// 不带主题变体查不到，返回 null 会让键帽文字看不见。
+    /// </summary>
+    protected static IBrush? FindBrush(string key) => ThemeSwitch.BrushOf(key);
+
+    /// <summary>
+    /// 换皮肤之后重新取一次画刷：颜色是主题资源，换主题要重新算，并通知绑定刷新。
+    /// 派生类有别的画刷就重写它。
+    /// </summary>
+    public virtual void RefreshThemeBrushes()
+    {
+        Raise(nameof(KeyCapForeground));
+        Raise(nameof(WaitBorderBrush));
+    }
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -1839,6 +1860,13 @@ internal sealed class RowVM : KeyCapRow
             Raise(nameof(BlockBorderBrush));
             Raise(nameof(BlockBorderThickness));
         }
+    }
+
+    /// <summary>换皮肤之后方块描边也要重取（等待态是品牌绿、重复绑定是红）。</summary>
+    public override void RefreshThemeBrushes()
+    {
+        base.RefreshThemeBrushes();
+        Raise(nameof(BlockBorderBrush));
     }
 }
 
