@@ -1,4 +1,4 @@
-﻿<Window xmlns="https://github.com/avaloniaui"
+<Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:MidiKeyPlayer"
         x:Class="MidiKeyPlayer.MainWindow"
@@ -42,22 +42,11 @@
   </Window.Styles>
 
   <!-- 打开入口是 SplitButton，它是 ContentControl，不是 Button：Styles\Controls.axaml 里的
-       Button.accent 不适用。所以直接把 Fluent 主题里 SplitButton 用到的画刷键换成项目强调色
-       （键名见 Avalonia.Themes.Fluent 的 SplitButton.xaml，四个状态全部用 DynamicResource 取，
-       在这里覆盖就能生效）。本窗口只有这一个 SplitButton。
-       不做这一步的话，按钮是 Fluent 默认的浅灰，颜色与旧的 accent 主按钮不一致。 -->
-  <Window.Resources>
-    <ResourceDictionary>
-      <StaticResource x:Key="SplitButtonBackground" ResourceKey="BrushAccent"/>
-      <StaticResource x:Key="SplitButtonBackgroundPointerOver" ResourceKey="BrushAccentHover"/>
-      <StaticResource x:Key="SplitButtonBackgroundPressed" ResourceKey="BrushAccentPressed"/>
-      <StaticResource x:Key="SplitButtonBackgroundDisabled" ResourceKey="BrushAccentDisabled"/>
-      <StaticResource x:Key="SplitButtonForeground" ResourceKey="BrushOnAccent"/>
-      <StaticResource x:Key="SplitButtonForegroundPointerOver" ResourceKey="BrushOnAccent"/>
-      <StaticResource x:Key="SplitButtonForegroundPressed" ResourceKey="BrushOnAccent"/>
-      <StaticResource x:Key="SplitButtonForegroundDisabled" ResourceKey="BrushOnAccent"/>
-    </ResourceDictionary>
-  </Window.Resources>
+       Button.accent 不适用。Fluent 主题里 SplitButton 用到的八个画刷键（键名见
+       Avalonia.Themes.Fluent 的 SplitButton.xaml）改在 Styles\Theme.axaml 的主题字典里覆盖，
+       深浅两套各指一份品牌绿。本窗口只有这一个 SplitButton。
+       不这样做的话，按钮是 Fluent 默认的浅灰，颜色与主按钮不一致；放在窗口级资源里也不行 ——
+       那里是 StaticResource，解析时不认主题变体，只有一套颜色。 -->
 
   <Grid>
 
@@ -642,18 +631,27 @@
         </StackPanel>
       </Border>
 
-      <!-- 播放前自检在主界面状态卡里常驻显示（见上面的 PreflightRow）。
-           这里只留一个开关：不想要的人可以关掉，默认开。 -->
+      <!-- 界面：皮肤与主界面上显示什么。播放前自检本体在主界面状态卡里（见上面的 PreflightRow），
+           这里只有它的显示开关：不想要的人可以关掉，默认开。 -->
       <Border Classes="card" Padding="14,10">
-        <StackPanel Spacing="4">
-          <TextBlock Text="主界面显示" Classes="sectionLabel" FontSize="{DynamicResource FontSmall}"
+        <StackPanel Spacing="6">
+          <TextBlock Text="界面" Classes="sectionLabel" FontSize="{DynamicResource FontSmall}"
                      FontWeight="SemiBold"/>
-          <CheckBox x:Name="ChkShowPreflight" Content="播放前自检（管理员 / 输入法）"
-                    FontSize="{DynamicResource FontSmall}" IsChecked="True" VerticalAlignment="Center"
-                    IsCheckedChanged="ShowPreflight_Changed"
-                    ToolTip.Tip="勾选时，主界面右上方的状态卡里常驻显示自检结论与「刷新」按钮。关掉后主界面不再显示这三样"/>
+          <WrapPanel ItemSpacing="20" LineSpacing="8">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Text="皮肤" Classes="label" MinWidth="34"/>
+              <ComboBox x:Name="ThemeCombo" Width="152" FontSize="{DynamicResource FontSmall}"
+                        SelectedIndex="0" VerticalAlignment="Center"
+                        SelectionChanged="Theme_Changed"
+                        ToolTip.Tip="自动 = 跟随 Windows 的浅色 / 深色设置。选完立即生效，不用重启"/>
+            </StackPanel>
+            <CheckBox x:Name="ChkShowPreflight" Content="播放前自检（管理员 / 输入法）"
+                      FontSize="{DynamicResource FontSmall}" IsChecked="True" VerticalAlignment="Center"
+                      IsCheckedChanged="ShowPreflight_Changed"
+                      ToolTip.Tip="勾选时，主界面右上方的状态卡里常驻显示自检结论与「刷新」按钮。关掉后主界面不再显示这三样"/>
+          </WrapPanel>
           <TextBlock Classes="caption" TextWrapping="Wrap" LineHeight="19"
-                     Text="自检常驻在主界面右上方的状态卡里：管理员权限与输入法状态一目了然。这里关掉，主界面就不再显示它。"/>
+                     Text="皮肤分浅色（白）与深色（黑），也可以跟随系统。自检常驻在主界面右上方的状态卡里，这里关掉就不再显示。"/>
         </StackPanel>
       </Border>
 

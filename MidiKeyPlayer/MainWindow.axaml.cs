@@ -62,6 +62,8 @@ public partial class MainWindow : Window
     private const double SeekStepSeconds = 5;   // 快进/后退热键的步长
 
     private bool _uiReady;   // 构造期各下拉框初始化会触发 *Changed，此时不应写日志
+    private bool _warnIsOk;  // 提示行（LblWarn）现在是不是「全部有键」那种绿色；换皮肤时按它重涂
+    private bool _devThemeOverride;   // 【开发用】探针切皮肤中：只上色，不写设置
     private string _updateUrl = "";     // 有新版本时的下载页
     private string _updateTag = "";     // 有新版本时的版本号
 
@@ -111,6 +113,8 @@ public partial class MainWindow : Window
         ChkAutoMinimize.IsChecked = _cfg.AutoMinimizeOnPlay;
         ChkShowPreflight.IsChecked = _cfg.ShowPreflight;
         PreflightRow.IsVisible = _cfg.ShowPreflight;   // 默认开：自检常驻主界面状态卡
+        ThemeCombo.ItemsSource = ThemeSwitch.Names;    // 自动 / 浅色 / 深色，下标就是设置里的取值
+        ThemeCombo.SelectedIndex = ThemeSwitch.Clamp(_cfg.ThemeMode);
         TimingCombo.SelectedIndex = Math.Clamp(_cfg.TimingIndex, 0, 2);
         RefreshRecentUi();   // 「打开」下拉菜单按设置里的历史重建（含「最近打开」子菜单）
         // 曲目卡常驻（issue #57）：上次列过的目录还在就自动扫描并显示，不用每次重开都重新选目录
@@ -1899,12 +1903,21 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>按资源名取主题画刷。取不到就用中性文字色，绝不写字面色值。</summary>
+    /// <summary>
+    /// 按资源名取主题画刷（Styles/Theme.axaml 的深浅两套都按主题变体查）。
+    /// 先按当前皮肤查，查不到再不指定变体查一次；都取不到就用中性灰，绝不写字面色值。
+    /// </summary>
     private static IBrush ResourceBrush(string key)
     {
-        if (Application.Current?.TryFindResource(key, out var found) == true && found is IBrush b)
-            return b;
-        return NeutralBrush;
+        var app = Application.Current;
+        if (app != null)
+        {
+            if (app.TryFindResource(key, app.ActualThemeVariant, out var themed) && themed is IBrush tb)
+                return tb;
+            if (app.TryFindResource(key, out var any) && any is IBrush ab)
+                return ab;
+        }
+        return FallbackMuted;
     }
 
     /// <summary>
@@ -2257,13 +2270,16 @@ public partial class MainWindow : Window
         InsertLog("已重新检测管理员权限与输入法。");
     }
 
-    // 与 Styles/Theme.axaml 的语义色 token 保持一致（改配色时两处一起改）
-    private static readonly Avalonia.Media.IBrush OkBrush =
-        new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#1E7A3C"));   // = BrushSuccess
-    private static readonly Avalonia.Media.IBrush FailBrush =
-        new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#C0392B"));   // = BrushDanger
-    private static readonly Avalonia.Media.IBrush NeutralBrush =
-        new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#8A93A0"));   // = BrushTextMuted
+    // 语义色一律从主题资源取（Styles/Theme.axaml 是唯一真源，深浅两套都在那里）。
+    // 写成属性而不是字段：换皮肤之后下一次赋值就拿到新皮肤的颜色。
+    // 兜底是固定灰 #6B7480：它自己不能再走 ResourceBrush，否则取不到时无限递归。
+    private static readonly Avalonia.Media.IBrush FallbackMuted =
+        new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#6B7480"));
+
+    private static Avalonia.Media.IBrush OkBrush => ResourceBrush("BrushSuccess");
+    private static Avalonia.Media.IBrush FailBrush => ResourceBrush("BrushDanger");
+    private static Avalonia.Media.IBrush NeutralBrush => ResourceBrush("BrushTextMuted");
+    private static Avalonia.Media.IBrush WarningBrush => ResourceBrush("BrushWarn");
 
     /// <summary>通过打勾、提醒打问号、未通过打叉。</summary>
     private static void PaintCheck(PreflightCheck.Check c,
@@ -2360,6 +2376,54 @@ public partial class MainWindow : Window
         PreflightRow.IsVisible = on;
         if (_cfg != null) _cfg.ShowPreflight = on;
         ScheduleSave();
+    }
+
+    // ================= 皮肤（浅色 / 深色 / 自动） =================
+
+    /// <summary>
+    /// 皮肤档位：自动（跟随系统）/ 浅色（白）/ 深色（黑）。
+    /// 改完立即生效：界面颜色走 DynamicResource，代码里自己赋色的那几处由
+    /// <see cref="ApplyThemeColors"/> 重取一遍。
+    /// </summary>
+    private void Theme_Changed(object? sender, SelectionChangedEventArgs e)
+    {
+        // 构造期给下拉框设初值也会触发这里：那时 _cfg 还没读、其它控件也没摆好。
+        // 启动时的皮肤由 App.OnFrameworkInitializationCompleted 先设，这里只处理用户改档位。
+        if (!_uiReady) return;
+
+        int mode = ThemeSwitch.Clamp(ThemeCombo.SelectedIndex);
+        ThemeSwitch.Apply(mode);
+        ApplyThemeColors();
+        InsertLog($"皮肤：{ThemeSwitch.Names[mode]}");
+
+        // 探针切皮肤只为拍图（见 SetThemeForDev）：不写设置，免得改掉开发机的档位
+        if (_devThemeOverride) return;
+        _cfg.ThemeMode = mode;
+        ScheduleSave();
+    }
+
+    /// <summary>【开发用】按档位切皮肤，走设置里那个下拉框的同一条链路（快照用）。
+    /// 只切不落盘：探针跑完就退出，不能把开发机的设置改成别的档位。</summary>
+    internal void SetThemeForDev(int mode)
+    {
+        _devThemeOverride = true;
+        try { ThemeCombo.SelectedIndex = ThemeSwitch.Clamp(mode); }
+        finally { _devThemeOverride = false; }
+    }
+
+    /// <summary>
+    /// 换皮肤之后，把「代码里写死过颜色」的地方重取一遍。
+    /// 走资源绑定的控件不用管，Avalonia 自己会按新主题重算。
+    /// </summary>
+    private void ApplyThemeColors()
+    {
+        if (Roll != null) Roll.InvalidateVisual();   // 卷帘是自绘的，颜色由它自己按主题取
+        ApplyVoiceBrushes();                         // 未参与演奏的声轨用弱化色，随皮肤变
+        RunPreflight();                              // 自检的 ✔ / ✘ / • 是代码赋色的
+        UpdateMidiStatus();                          // 「实时演奏中」也用语义色
+        if (!_busy) SetIdleHint();                   // 空闲时状态大字用弱化色
+        // 提示行只有「有话说」和「全部有键」两种颜色，按换皮肤前的状态重涂一次
+        LblWarn.Foreground = _warnIsOk ? OkBrush : WarningBrush;
     }
 
     // ================= 键位设置（独立窗口） =================
@@ -2684,7 +2748,7 @@ public partial class MainWindow : Window
         if (EmptyHint != null) EmptyHint.IsVisible = _tracks.Count == 0;
 
         var okColor = OkBrush;
-        var warnColor = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#B25A00"));
+        var warnColor = WarningBrush;
 
         var rows = ActiveRows();
         if (rows.Count == 0 || _parsed == null)
@@ -2694,6 +2758,7 @@ public partial class MainWindow : Window
                 : "已载入 —— 单击一行作为主旋律；勾选“合”可按 1、2、3 优先级合奏。";
             LblWarn.Text = "";
             LblWarn.Foreground = warnColor;
+            _warnIsOk = false;
             _previewNotes = new List<MappedNote>();
             _previewSeconds = 0;
 
@@ -2774,16 +2839,19 @@ public partial class MainWindow : Window
                 ? "该轨道/声道没有音符，请换一行。"
                 : "这些音在键位上都没有对应的键。请换个方案，或把「移调」调到 0 附近再试。";
             LblWarn.Foreground = warnColor;
+            _warnIsOk = false;
         }
         else if (m.SkipCount > 0)
         {
             LblWarn.Text = $"有 {m.SkipCount} 个音没有对应的键，会跳过不弹（可用「移调」或换方案调整）。";
             LblWarn.Foreground = warnColor;
+            _warnIsOk = false;
         }
         else
         {
             LblWarn.Text = "全部音都有对应的键，可直接演奏。";
             LblWarn.Foreground = okColor;
+            _warnIsOk = true;
         }
         UpdateTransportUi();
     }

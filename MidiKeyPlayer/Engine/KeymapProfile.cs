@@ -62,8 +62,8 @@ public sealed class KeymapFormatException : Exception
 public sealed class KeymapProfile
 {
     /// <summary>
-    /// 默认方案名。内置三套都用直白名字（自然音 / 半音 / 半音三排），不再由几何量拼出来 ——
-    /// 「36 键 4 排 3 个八度」这类名字会把用户绕晕，实际只有三排。
+    /// 默认方案名。内置四套都用直白名字（自然音 / 半音 / 第五人格键位 / 8 键半音），
+    /// 不再由几何量拼出来 ——「36 键 4 排 3 个八度」这类名字会把用户绕晕，实际只有三排。
     /// 默认方案：Z X C V B N M / A S D F G H J / Q W E R T Y U 三排自然音，一排一个八度，60..95。
     /// </summary>
     public const string DefaultName = "21 键自然音";
@@ -137,7 +137,7 @@ public sealed class KeymapProfile
     private static IReadOnlyList<KeymapProfile>? _presets;
 
     /// <summary>
-    /// 3 套内置预设。第一项就是默认方案。名字现在是写死的中文（见 <see cref="BuildPresets"/>），
+    /// 4 套内置预设。第一项就是默认方案。名字现在是写死的中文（见 <see cref="BuildPresets"/>），
     /// <see cref="SchemeNameOf"/> 只留着算几何量，不再用来命名。只读用；要改先 <see cref="Clone"/>。
     /// </summary>
     public static IReadOnlyList<KeymapProfile> Presets => _presets ??= BuildPresets();
@@ -256,6 +256,34 @@ public sealed class KeymapProfile
     }
 
     /// <summary>
+    /// 第 4 套（8 键半音）：一排 8 个键 <c>Z X C V B N M ,</c> 是 do..高音 do（自然音），
+    /// 鼠标三键补齐：左键降八度、右键升八度、中键升半音。能弹 48..85。
+    /// 键位与旧版删掉的「8 键单排（含高八度 do，默认）」完全相同（见 <see cref="LegacyPresetAlias"/>）。
+    /// </summary>
+    private static KeymapProfile BuildChromatic8()
+    {
+        var keys = new List<KeyBinding>();
+        // 一排八个键：自然音 do re mi fa sol la si，再加高音 do。行号都是 0。
+        string[] row = { "Z", "X", "C", "V", "B", "N", "M", "," };
+        int[] offsets = { 0, 2, 4, 5, 7, 9, 11, 12 };
+        for (int c = 0; c < row.Length; c++)
+            keys.Add(new KeyBinding { Key = row[c], Offset = offsets[c], Row = 0 });
+
+        return new KeymapProfile
+        {
+            Version = CurrentVersion,
+            Description = "一排 8 键自然音：Z X C V B N M , 是 do..高音 do；"
+                        + "鼠标左键降八度、右键升八度、中键升半音",
+            BaseNote = 60,
+            Keys = keys,
+            ModifiersEnabled = true,
+            OctaveUp = "MouseRight",
+            OctaveDown = "MouseLeft",
+            Sharp = "MouseMiddle",
+        };
+    }
+
+    /// <summary>
     /// 方案名：「N 键 M 排 K 个八度」。
     /// N = 键位数；M = 这些键在物理键盘上占几排；K = 能弹音域的八度数（向上取整）。
     /// K 由「键位 × 八度键」能到达的音高张角算出，升半音键只在音域内补半音，不扩展边界。
@@ -315,7 +343,7 @@ public sealed class KeymapProfile
     }
 
     /// <summary>
-    /// 3 套内置预设，名字直接写死成直白的中文（不再由 <see cref="SchemeNameOf"/> 拼几何量）。
+    /// 4 套内置预设，名字直接写死成直白的中文（不再由 <see cref="SchemeNameOf"/> 拼几何量）。
     /// 第 1 套的名字必须等于 <see cref="DefaultName"/>，不等就写日志。
     /// 第 3 套的用户可见名字由用户指定，键位与旧的「36 键半音三排」相同（见 <see cref="LegacyPresetAlias"/>）。
     /// </summary>
@@ -326,6 +354,7 @@ public sealed class KeymapProfile
             Preset(BuildDefault(), DefaultName),              // 第 1 套 = 默认方案：中 / 高 / 高高，三行七列自然音
             Preset(BuildChromatic21(), "21 键半音"),           // 第 2 套：低 / 中 / 高三个八度自然音 + Shift 升半音
             Preset(BuildChromatic36(), "第五人格键位"),         // 第 3 套：三排各 12 个半音
+            Preset(BuildChromatic8(), "8 键半音"),             // 第 4 套：一排 8 键 do..高音 do + 鼠标三键
         };
         if (!string.Equals(list[0].Name, DefaultName, StringComparison.Ordinal))
             LogFile.Append($"[键位] 默认方案名是「{list[0].Name}」，与常量「{DefaultName}」不同，请同步。");
@@ -367,18 +396,21 @@ public sealed class KeymapProfile
         ["36 键 3 排 3 个八度"] = "第五人格键位",
         // 第 3 套改名：老名字 → 现在的名字。键位一字未动
         ["36 键半音三排"] = "第五人格键位",
+        // 8 键单排这一套删掉过一版，v1.0.7 又加回来了（名字改成「8 键半音」）。键位一字未动，
+        // 所以老名字指回新预设，老用户的设置能直接恢复，不用手工再选一次。
+        ["8 键单排（含高八度 do，默认）"] = "8 键半音",
+        ["8 键 1 排 3 个八度"] = "8 键半音",
     };
 
     /// <summary>
     /// 已经删掉的预设：读到这些名字就回退到默认方案。
-    /// 现在只保留 21 键自然音 / 21 键半音 / 第五人格键位三套，其余历史名字全部列在这里。
-    /// 改过名但键位还在的（例如「36 键半音三排」）走 <see cref="LegacyPresetAlias"/>，不要写在这里。
+    /// 现在保留 21 键自然音 / 21 键半音 / 第五人格键位 / 8 键半音四套，其余历史名字全部列在这里。
+    /// 改过名但键位还在的（例如「36 键半音三排」「8 键单排（含高八度 do，默认）」）走
+    /// <see cref="LegacyPresetAlias"/>，不要写在这里。
     /// </summary>
     private static readonly HashSet<string> RemovedPresetNames = new(StringComparer.Ordinal)
     {
-        // 旧的自然音方案（8 键 / 7 键 / 15 键 / 23 键）
-        "8 键 1 排 3 个八度",
-        "8 键单排（含高八度 do，默认）",
+        // 旧的自然音方案（7 键 / 15 键 / 23 键）
         "7 键 1 排 1 个八度",
         "7 键单排自然音阶",
         "15 键 3 排 2 个八度",

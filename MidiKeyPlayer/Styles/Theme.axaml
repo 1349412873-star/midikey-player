@@ -2,36 +2,164 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
   <!-- ===================== 调色板（唯一真源） =====================
-       换配色只改这里，MainWindow 里不再出现裸 #RRGGBB；品牌绿需与 App.axaml 的 SystemAccentColor 保持一致。 -->
+       换配色只改这里，界面里不出现裸 #RRGGBB；品牌绿需与 App.axaml 的 SystemAccentColor 保持一致。
 
-  <!-- 背景与表面 -->
-  <SolidColorBrush x:Key="BrushCanvas"       Color="#F4F6F9"/>
-  <SolidColorBrush x:Key="BrushSurface"      Color="#FFFFFF"/>
-  <SolidColorBrush x:Key="BrushSurfaceAlt"   Color="#F8FAFC"/>
-  <SolidColorBrush x:Key="BrushSurfaceSunken" Color="#F7F8FA"/>
-  <SolidColorBrush x:Key="BrushBorder"       Color="#E4E8EE"/>
-  <SolidColorBrush x:Key="BrushBorderStrong" Color="#D3DAE3"/>
+       两套皮肤：Light（白）与 Dark（黑），键名两边完全一致。
+       跟随系统由 App.axaml.cs 设 Application.RequestedThemeVariant 决定，
+       界面一律用 DynamicResource 取值，切主题时不需要重建窗口。
+       用户可选项：自动（跟随系统）/ 浅色 / 深色，见设置「常规」页的外观一栏。 -->
 
-  <!-- 文字 -->
-  <SolidColorBrush x:Key="BrushText"          Color="#1F2933"/>
-  <SolidColorBrush x:Key="BrushTextSecondary" Color="#5B6673"/>
-  <!-- 弱化色 #8A93A0 在白底上只有 3.1:1，低于 WCAG AA 正文 4.5:1；提到 #6B7480（约 4.6:1）。 -->
-  <SolidColorBrush x:Key="BrushTextMuted"     Color="#6B7480"/>
+  <ResourceDictionary.ThemeDictionaries>
 
-  <!-- 品牌绿 -->
-  <SolidColorBrush x:Key="BrushAccent"         Color="#2E8B57"/>
-  <SolidColorBrush x:Key="BrushAccentHover"    Color="#26784A"/>
-  <SolidColorBrush x:Key="BrushAccentPressed"  Color="#1F6540"/>
-  <SolidColorBrush x:Key="BrushAccentDisabled" Color="#AECBBC"/>
-  <SolidColorBrush x:Key="BrushAccentSoft"     Color="#E8F3EC"/>
-  <SolidColorBrush x:Key="BrushOnAccent"       Color="#FFFFFF"/>
+    <!-- ===================== 白（默认） ===================== -->
+    <ResourceDictionary x:Key="Light">
 
-  <!-- 语义色 -->
-  <SolidColorBrush x:Key="BrushSuccess" Color="#1E7A3C"/>
-  <SolidColorBrush x:Key="BrushWarn"    Color="#B25A00"/>
-  <SolidColorBrush x:Key="BrushDanger"  Color="#C0392B"/>
+      <!-- 背景与表面 -->
+      <SolidColorBrush x:Key="BrushCanvas"       Color="#F4F6F9"/>
+      <SolidColorBrush x:Key="BrushSurface"      Color="#FFFFFF"/>
+      <SolidColorBrush x:Key="BrushSurfaceAlt"   Color="#F8FAFC"/>
+      <SolidColorBrush x:Key="BrushSurfaceSunken" Color="#F7F8FA"/>
+      <SolidColorBrush x:Key="BrushBorder"       Color="#E4E8EE"/>
+      <SolidColorBrush x:Key="BrushBorderStrong" Color="#D3DAE3"/>
 
-  <!-- ===================== 声轨配色（12 色，唯一真源） =====================
+      <!-- 文字 -->
+      <SolidColorBrush x:Key="BrushText"          Color="#1F2933"/>
+      <SolidColorBrush x:Key="BrushTextSecondary" Color="#5B6673"/>
+      <!-- 弱化色 #8A93A0 在白底上只有 3.1:1，低于 WCAG AA 正文 4.5:1；提到 #6B7480（约 4.6:1）。 -->
+      <SolidColorBrush x:Key="BrushTextMuted"     Color="#6B7480"/>
+
+      <!-- 品牌绿 -->
+      <SolidColorBrush x:Key="BrushAccent"         Color="#2E8B57"/>
+      <SolidColorBrush x:Key="BrushAccentHover"    Color="#26784A"/>
+      <SolidColorBrush x:Key="BrushAccentPressed"  Color="#1F6540"/>
+      <SolidColorBrush x:Key="BrushAccentDisabled" Color="#AECBBC"/>
+      <SolidColorBrush x:Key="BrushAccentSoft"     Color="#E8F3EC"/>
+      <SolidColorBrush x:Key="BrushOnAccent"       Color="#FFFFFF"/>
+
+      <!-- 语义色 -->
+      <SolidColorBrush x:Key="BrushSuccess" Color="#1E7A3C"/>
+      <SolidColorBrush x:Key="BrushWarn"    Color="#B25A00"/>
+      <SolidColorBrush x:Key="BrushDanger"  Color="#C0392B"/>
+
+      <!-- 提示条 -->
+      <SolidColorBrush x:Key="BrushDangerSoft"   Color="#FDF1EF"/>
+      <SolidColorBrush x:Key="BrushDangerBorder" Color="#F0CFC9"/>
+      <SolidColorBrush x:Key="BrushDangerText"   Color="#A32B22"/>
+      <SolidColorBrush x:Key="BrushWarnSoft"     Color="#FFF7E8"/>
+      <SolidColorBrush x:Key="BrushWarnBorder"   Color="#F0DCB4"/>
+      <SolidColorBrush x:Key="BrushInfoSoft"     Color="#EAF3FF"/>
+      <SolidColorBrush x:Key="BrushInfoBorder"   Color="#BBD6F5"/>
+      <SolidColorBrush x:Key="BrushInfoText"     Color="#1B4F91"/>
+
+      <!-- 倒计时时整窗的暖色提醒底。XAML 里没有引用：MainWindow.SetCountdownChrome
+           用 TryFindResource 按名字读它，所以不要当死键删掉。 -->
+      <SolidColorBrush x:Key="BrushCountdownChrome" Color="#FFF3E4D8"/>
+
+      <!-- 控件自绘用的小色（深浅两套都在，卷帘与状态行按主题取） -->
+      <SolidColorBrush x:Key="BrushKeyWhite"   Color="#FFFFFF"/>
+      <SolidColorBrush x:Key="BrushKeyBlack"   Color="#E4EAF2"/>
+      <SolidColorBrush x:Key="BrushRollBg"     Color="#F7F9FC"/>
+      <SolidColorBrush x:Key="BrushRollGrid"   Color="#E9EEF5"/>
+      <SolidColorBrush x:Key="BrushRollBeat"   Color="#DCE4EE"/>
+      <SolidColorBrush x:Key="BrushRollBar"    Color="#C9D5E3"/>
+      <SolidColorBrush x:Key="BrushRollOctave" Color="#E3E9F1"/>
+      <SolidColorBrush x:Key="BrushRollRuler"  Color="#EEF3F9"/>
+      <SolidColorBrush x:Key="BrushSkipNote"   Color="#C8D0D9"/>
+      <SolidColorBrush x:Key="BrushDisabledFace" Color="#F3F5F8"/>
+      <SolidColorBrush x:Key="BrushRollAccent" Color="#1F6FEB"/>
+      <SolidColorBrush x:Key="BrushRollHover"  Color="#8FB4E8"/>
+      <SolidColorBrush x:Key="BrushRollKeySel" Color="#C7DBFA"/>
+      <SolidColorBrush x:Key="BrushRollReadout" Color="#E8F0FC"/>
+      <SolidColorBrush x:Key="BrushRollReadoutBorder" Color="#C3D6F2"/>
+      <SolidColorBrush x:Key="BrushRollMarquee" Color="#331F6FEB"/>
+
+      <!-- Fluent 的 SplitButton 模板按这几个键名取色（本窗口只有一个 SplitButton，见 MainWindow.axaml）。
+           放在主题字典里、深浅各指一份，按钮才跟着皮肤走。 -->
+      <StaticResource x:Key="SplitButtonBackground" ResourceKey="BrushAccent"/>
+      <StaticResource x:Key="SplitButtonBackgroundPointerOver" ResourceKey="BrushAccentHover"/>
+      <StaticResource x:Key="SplitButtonBackgroundPressed" ResourceKey="BrushAccentPressed"/>
+      <StaticResource x:Key="SplitButtonBackgroundDisabled" ResourceKey="BrushAccentDisabled"/>
+      <StaticResource x:Key="SplitButtonForeground" ResourceKey="BrushOnAccent"/>
+      <StaticResource x:Key="SplitButtonForegroundPointerOver" ResourceKey="BrushOnAccent"/>
+      <StaticResource x:Key="SplitButtonForegroundPressed" ResourceKey="BrushOnAccent"/>
+      <StaticResource x:Key="SplitButtonForegroundDisabled" ResourceKey="BrushOnAccent"/>
+
+    </ResourceDictionary>
+
+    <!-- ===================== 黑 ===================== -->
+    <ResourceDictionary x:Key="Dark">
+
+      <!-- 背景与表面。比纯黑亮一点，卡片与画布才分得开 -->
+      <SolidColorBrush x:Key="BrushCanvas"       Color="#12161B"/>
+      <SolidColorBrush x:Key="BrushSurface"      Color="#1A2027"/>
+      <SolidColorBrush x:Key="BrushSurfaceAlt"   Color="#212831"/>
+      <SolidColorBrush x:Key="BrushSurfaceSunken" Color="#151A20"/>
+      <SolidColorBrush x:Key="BrushBorder"       Color="#2C343E"/>
+      <SolidColorBrush x:Key="BrushBorderStrong" Color="#3B4551"/>
+
+      <!-- 文字。三级都过 WCAG AA（在 #1A2027 上：正文 13.7:1、次级 7.8:1、弱化 6.1:1） -->
+      <SolidColorBrush x:Key="BrushText"          Color="#E7ECF2"/>
+      <SolidColorBrush x:Key="BrushTextSecondary" Color="#AAB4C0"/>
+      <SolidColorBrush x:Key="BrushTextMuted"     Color="#93A0AE"/>
+
+      <!-- 品牌绿。深底上整体提亮一档，否则按不动、看不清 -->
+      <SolidColorBrush x:Key="BrushAccent"         Color="#3AA469"/>
+      <SolidColorBrush x:Key="BrushAccentHover"    Color="#4FB57C"/>
+      <SolidColorBrush x:Key="BrushAccentPressed"  Color="#2E8B57"/>
+      <SolidColorBrush x:Key="BrushAccentDisabled" Color="#2C4A3B"/>
+      <SolidColorBrush x:Key="BrushAccentSoft"     Color="#1D3227"/>
+      <SolidColorBrush x:Key="BrushOnAccent"       Color="#FFFFFF"/>
+
+      <!-- 语义色。深底上用亮色，不要沿用白底那三个深色（对比度不够） -->
+      <SolidColorBrush x:Key="BrushSuccess" Color="#4ED8A0"/>
+      <SolidColorBrush x:Key="BrushWarn"    Color="#FFB020"/>
+      <SolidColorBrush x:Key="BrushDanger"  Color="#FF6B5E"/>
+
+      <!-- 提示条：底色压深、文字提亮 -->
+      <SolidColorBrush x:Key="BrushDangerSoft"   Color="#35201D"/>
+      <SolidColorBrush x:Key="BrushDangerBorder" Color="#5A342C"/>
+      <SolidColorBrush x:Key="BrushDangerText"   Color="#FF9E92"/>
+      <SolidColorBrush x:Key="BrushWarnSoft"     Color="#33270F"/>
+      <SolidColorBrush x:Key="BrushWarnBorder"   Color="#5C4A24"/>
+      <SolidColorBrush x:Key="BrushInfoSoft"     Color="#152A42"/>
+      <SolidColorBrush x:Key="BrushInfoBorder"   Color="#2C4E76"/>
+      <SolidColorBrush x:Key="BrushInfoText"     Color="#9CC7FF"/>
+
+      <SolidColorBrush x:Key="BrushCountdownChrome" Color="#FF2A1E14"/>
+
+      <!-- 控件自绘用的小色 -->
+      <SolidColorBrush x:Key="BrushKeyWhite"   Color="#D8DEE6"/>
+      <SolidColorBrush x:Key="BrushKeyBlack"   Color="#2A323C"/>
+      <SolidColorBrush x:Key="BrushRollBg"     Color="#161B21"/>
+      <SolidColorBrush x:Key="BrushRollGrid"   Color="#232A33"/>
+      <SolidColorBrush x:Key="BrushRollBeat"   Color="#2A323C"/>
+      <SolidColorBrush x:Key="BrushRollBar"    Color="#3A444F"/>
+      <SolidColorBrush x:Key="BrushRollOctave" Color="#242B34"/>
+      <SolidColorBrush x:Key="BrushRollRuler"  Color="#1C2229"/>
+      <SolidColorBrush x:Key="BrushSkipNote"   Color="#4C5560"/>
+      <SolidColorBrush x:Key="BrushDisabledFace" Color="#222932"/>
+      <SolidColorBrush x:Key="BrushRollAccent" Color="#4C9AFF"/>
+      <SolidColorBrush x:Key="BrushRollHover"  Color="#6FA8F0"/>
+      <SolidColorBrush x:Key="BrushRollKeySel" Color="#2F4A6B"/>
+      <SolidColorBrush x:Key="BrushRollReadout" Color="#1E2A3A"/>
+      <SolidColorBrush x:Key="BrushRollReadoutBorder" Color="#33507A"/>
+      <SolidColorBrush x:Key="BrushRollMarquee" Color="#404C9AFF"/>
+
+      <!-- 同白皮肤：SplitButton 的八个画刷键指向本套的品牌绿 -->
+      <StaticResource x:Key="SplitButtonBackground" ResourceKey="BrushAccent"/>
+      <StaticResource x:Key="SplitButtonBackgroundPointerOver" ResourceKey="BrushAccentHover"/>
+      <StaticResource x:Key="SplitButtonBackgroundPressed" ResourceKey="BrushAccentPressed"/>
+      <StaticResource x:Key="SplitButtonBackgroundDisabled" ResourceKey="BrushAccentDisabled"/>
+      <StaticResource x:Key="SplitButtonForeground" ResourceKey="BrushOnAccent"/>
+      <StaticResource x:Key="SplitButtonForegroundPointerOver" ResourceKey="BrushOnAccent"/>
+      <StaticResource x:Key="SplitButtonForegroundPressed" ResourceKey="BrushOnAccent"/>
+      <StaticResource x:Key="SplitButtonForegroundDisabled" ResourceKey="BrushOnAccent"/>
+
+    </ResourceDictionary>
+
+  </ResourceDictionary.ThemeDictionaries>
+
+  <!-- ===================== 声轨配色（12 色，唯一真源，两套皮肤共用） =====================
        深色底与浅色底上都能读。分配：声轨序号 % 12。
        左侧列表文字与卷帘音符共用同一号色，声轨一一对应。
        未参与演奏的声轨统一用弱化灰 BrushTextMuted（不叠加不透明度，否则对比度不足）。
@@ -48,20 +176,6 @@
   <SolidColorBrush x:Key="BrushVoice9"  Color="#7FE0E8"/>
   <SolidColorBrush x:Key="BrushVoice10" Color="#B0A0FF"/>
   <SolidColorBrush x:Key="BrushVoice11" Color="#F2A65A"/>
-
-  <!-- 提示条 -->
-  <SolidColorBrush x:Key="BrushDangerSoft"   Color="#FDF1EF"/>
-  <SolidColorBrush x:Key="BrushDangerBorder" Color="#F0CFC9"/>
-  <SolidColorBrush x:Key="BrushDangerText"   Color="#A32B22"/>
-  <SolidColorBrush x:Key="BrushWarnSoft"     Color="#FFF7E8"/>
-  <SolidColorBrush x:Key="BrushWarnBorder"   Color="#F0DCB4"/>
-  <SolidColorBrush x:Key="BrushInfoSoft"     Color="#EAF3FF"/>
-  <SolidColorBrush x:Key="BrushInfoBorder"   Color="#BBD6F5"/>
-  <SolidColorBrush x:Key="BrushInfoText"     Color="#1B4F91"/>
-
-  <!-- 倒计时时整窗的暖色提醒底。XAML 里没有引用：MainWindow.SetCountdownChrome
-       用 TryFindResource 按名字读它，所以不要当死键删掉。 -->
-  <SolidColorBrush x:Key="BrushCountdownChrome" Color="#FFF3E4D8"/>
 
   <!-- ===================== 字体 =====================
        Windows 用雅黑；macOS/Linux 回退苹方/思源，避免整窗掉到默认字体。 -->

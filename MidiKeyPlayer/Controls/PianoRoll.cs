@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
+using Avalonia.Styling;
 using MidiKeyPlayer.Midi;
 
 namespace MidiKeyPlayer;
@@ -92,12 +93,95 @@ public sealed class PianoRoll : Control
     private readonly HashSet<RawNote> _eraseDone = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<int> _pitchSelDone = new();
 
-    private static readonly IBrush Bg = new SolidColorBrush(Color.Parse("#F7F9FC"));
-    private static readonly IPen BorderPen = new Pen(new SolidColorBrush(Color.Parse("#DDE3EA")), 1);
-    private static readonly IPen GridPen = new Pen(new SolidColorBrush(Color.Parse("#E9EEF5")), 1);
-    private static readonly IPen BeatPen = new Pen(new SolidColorBrush(Color.Parse("#DCE4EE")), 1);
-    private static readonly IPen BarPen = new Pen(new SolidColorBrush(Color.Parse("#C9D5E3")), 1);
-    private static readonly IPen OctavePen = new Pen(new SolidColorBrush(Color.Parse("#E3E9F1")), 1);
+    // ================= 自绘配色（浅色 / 深色两套，跟随皮肤） =================
+
+    /// <summary>
+    /// 卷帘自己画的颜色。色值真源是 Styles/Theme.axaml 的 BrushRoll* / BrushKey* / BrushBorder，
+    /// 这里按主题变体各缓存一份：换皮肤时按键取新的一份，不用重建控件，也不会每帧查资源。
+    /// 资源取不到（设计器里没挂主题）才用同一批色值的字面量兜底。
+    /// </summary>
+    private sealed class Skin
+    {
+        public IBrush Bg = null!, Skip = null!, Head = null!, ReadoutBg = null!, Text = null!, Muted = null!;
+        public IBrush KeyWhite = null!, KeyBlack = null!, KeySel = null!, RulerBg = null!, MarqueeFill = null!;
+        public IPen BorderPen = null!, GridPen = null!, BeatPen = null!, BarPen = null!, OctavePen = null!;
+        public IPen HoverPen = null!, SelPen = null!, HeadPen = null!, ReadoutBorder = null!;
+        public IPen LaneBorder = null!, MarqueePen = null!;
+    }
+
+    private static readonly Dictionary<ThemeVariant, Skin> Skins = new();
+    private static Skin? _skin;
+    private static ThemeVariant _skinVariant = ThemeVariant.Default;
+
+    private static Skin CurrentSkin()
+    {
+        var variant = Application.Current?.ActualThemeVariant ?? ThemeVariant.Light;
+        var cached = _skin;
+        if (cached != null && _skinVariant == variant) return cached;
+
+        if (!Skins.TryGetValue(variant, out var skin))
+        {
+            skin = BuildSkin(variant);
+            Skins[variant] = skin;
+        }
+        _skin = skin;
+        _skinVariant = variant;
+        return skin;
+    }
+
+    private static Skin BuildSkin(ThemeVariant variant)
+    {
+        bool dark = variant == ThemeVariant.Dark;
+        return new Skin
+        {
+            Bg = RollBrush("BrushRollBg", variant, dark ? "#161B21" : "#F7F9FC"),
+            BorderPen = RollPen("BrushBorder", variant, dark ? "#2C343E" : "#DDE3EA", 1),
+            GridPen = RollPen("BrushRollGrid", variant, dark ? "#232A33" : "#E9EEF5", 1),
+            BeatPen = RollPen("BrushRollBeat", variant, dark ? "#2A323C" : "#DCE4EE", 1),
+            BarPen = RollPen("BrushRollBar", variant, dark ? "#3A444F" : "#C9D5E3", 1),
+            OctavePen = RollPen("BrushRollOctave", variant, dark ? "#242B34" : "#E3E9F1", 1),
+            Skip = RollBrush("BrushSkipNote", variant, dark ? "#4C5560" : "#C8D0D9"),
+            HoverPen = RollPen("BrushRollHover", variant, dark ? "#6FA8F0" : "#8FB4E8", 1),
+            SelPen = RollPen("BrushRollAccent", variant, dark ? "#4C9AFF" : "#1F6FEB", 2),
+            HeadPen = RollPen("BrushRollAccent", variant, dark ? "#4C9AFF" : "#1F6FEB", 2),
+            Head = RollBrush("BrushRollAccent", variant, dark ? "#4C9AFF" : "#1F6FEB"),
+            ReadoutBg = RollBrush("BrushRollReadout", variant, dark ? "#1E2A3A" : "#E8F0FC"),
+            ReadoutBorder = RollPen("BrushRollReadoutBorder", variant, dark ? "#33507A" : "#C3D6F2", 1),
+            Text = RollBrush("BrushText", variant, dark ? "#E7ECF2" : "#2A3646"),
+            Muted = RollBrush("BrushTextMuted", variant, dark ? "#93A0AE" : "#7C8798"),
+            KeyWhite = RollBrush("BrushKeyWhite", variant, dark ? "#D8DEE6" : "#FFFFFF"),
+            KeyBlack = RollBrush("BrushKeyBlack", variant, dark ? "#2A323C" : "#E4EAF2"),
+            KeySel = RollBrush("BrushRollKeySel", variant, dark ? "#2F4A6B" : "#C7DBFA"),
+            RulerBg = RollBrush("BrushRollRuler", variant, dark ? "#1C2229" : "#EEF3F9"),
+            LaneBorder = RollPen("BrushBorder", variant, dark ? "#2C343E" : "#DDE3EA", 1),
+            MarqueeFill = RollBrush("BrushRollMarquee", variant, dark ? "#404C9AFF" : "#331F6FEB"),
+            MarqueePen = RollPen("BrushRollAccent", variant, dark ? "#4C9AFF" : "#1F6FEB", 1),
+        };
+    }
+
+    /// <summary>按资源名取主题画刷（先按皮肤查，查不到再不指定变体查一次）。</summary>
+    private static IBrush RollBrush(string key, ThemeVariant variant, string fallback)
+    {
+        var app = Application.Current;
+        if (app != null)
+        {
+            if (app.TryFindResource(key, variant, out var themed) && themed is IBrush tb) return tb;
+            if (app.TryFindResource(key, out var any) && any is IBrush ab) return ab;
+        }
+        return new SolidColorBrush(Color.Parse(fallback));
+    }
+
+    private static IPen RollPen(string key, ThemeVariant variant, string fallback, double thickness)
+        => new Pen(RollBrush(key, variant, fallback), thickness);
+
+    // 下面这些名字原来是 static readonly 字段。改成属性之后所有使用点一行都不用改，
+    // 但每次取值都按当前皮肤拿颜色 —— 换皮肤时只要 InvalidateVisual 一次就重画成新配色。
+    private static IBrush Bg => CurrentSkin().Bg;
+    private static IPen BorderPen => CurrentSkin().BorderPen;
+    private static IPen GridPen => CurrentSkin().GridPen;
+    private static IPen BeatPen => CurrentSkin().BeatPen;
+    private static IPen BarPen => CurrentSkin().BarPen;
+    private static IPen OctavePen => CurrentSkin().OctavePen;
     /// <summary>声轨调色板色数（与 Theme.axaml 的 BrushVoice0..11 对齐）。</summary>
     public const int VoiceCount = 12;
 
@@ -159,22 +243,22 @@ public sealed class PianoRoll : Control
     /// <summary>该音高当前是否算「可演奏」（决定画声轨色还是画灰）。</summary>
     public bool IsInRangePitch(int pitch) => _inRange.Contains(pitch);
 
-    private static readonly IBrush SkipBrush = new SolidColorBrush(Color.Parse("#C8D0D9"));
-    private static readonly IPen HoverPen = new Pen(new SolidColorBrush(Color.Parse("#8FB4E8")), 1);
-    private static readonly IPen SelPen = new Pen(new SolidColorBrush(Color.Parse("#1F6FEB")), 2);
-    private static readonly IPen HeadPen = new Pen(new SolidColorBrush(Color.Parse("#1F6FEB")), 2);
-    private static readonly IBrush HeadBrush = new SolidColorBrush(Color.Parse("#1F6FEB"));
-    private static readonly IBrush ReadoutBg = new SolidColorBrush(Color.Parse("#E8F0FC"));
-    private static readonly IPen ReadoutBorder = new Pen(new SolidColorBrush(Color.Parse("#C3D6F2")), 1);
-    private static readonly IBrush TextBrush = new SolidColorBrush(Color.Parse("#2A3646"));
-    private static readonly IBrush MutedBrush = new SolidColorBrush(Color.Parse("#7C8798"));
-    private static readonly IBrush KeyWhite = new SolidColorBrush(Color.Parse("#FFFFFF"));
-    private static readonly IBrush KeyBlack = new SolidColorBrush(Color.Parse("#E4EAF2"));
-    private static readonly IBrush KeySel = new SolidColorBrush(Color.Parse("#C7DBFA"));
-    private static readonly IBrush RulerBg = new SolidColorBrush(Color.Parse("#EEF3F9"));
-    private static readonly IPen LaneBorder = new Pen(new SolidColorBrush(Color.Parse("#DDE3EA")), 1);
-    private static readonly IBrush MarqueeFill = new SolidColorBrush(Color.Parse("#331F6FEB"));
-    private static readonly IPen MarqueePen = new Pen(new SolidColorBrush(Color.Parse("#1F6FEB")), 1);
+    private static IBrush SkipBrush => CurrentSkin().Skip;
+    private static IPen HoverPen => CurrentSkin().HoverPen;
+    private static IPen SelPen => CurrentSkin().SelPen;
+    private static IPen HeadPen => CurrentSkin().HeadPen;
+    private static IBrush HeadBrush => CurrentSkin().Head;
+    private static IBrush ReadoutBg => CurrentSkin().ReadoutBg;
+    private static IPen ReadoutBorder => CurrentSkin().ReadoutBorder;
+    private static IBrush TextBrush => CurrentSkin().Text;
+    private static IBrush MutedBrush => CurrentSkin().Muted;
+    private static IBrush KeyWhite => CurrentSkin().KeyWhite;
+    private static IBrush KeyBlack => CurrentSkin().KeyBlack;
+    private static IBrush KeySel => CurrentSkin().KeySel;
+    private static IBrush RulerBg => CurrentSkin().RulerBg;
+    private static IPen LaneBorder => CurrentSkin().LaneBorder;
+    private static IBrush MarqueeFill => CurrentSkin().MarqueeFill;
+    private static IPen MarqueePen => CurrentSkin().MarqueePen;
 
     private static readonly Typeface Face = Typeface.Default;
     private static readonly int[] BlackPc = { 1, 3, 6, 8, 10 };

@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     发一个新版本：版本号自动加一，写更新日志，构建、自检、提交、打 tag、上传。
@@ -228,12 +228,25 @@ function Invoke-Snapshot([string]$exe, [string]$tag) {
     if ($r.ExitCode -ne 0) { throw "高级设置窗口快照退出码 $($r.ExitCode)。" }
     Remove-Item Env:\MIDIKEY_UI_SNAPSHOT_ADVANCED -ErrorAction SilentlyContinue
 
-    foreach ($f in @($main, $keymap, $advanced)) {
+    # 深色皮肤：拍图前用设置里那个下拉框切到「深色（黑）」，验证不重启也能换色。
+    # 探针只切不落盘，不会改掉跑脚本这台机器的皮肤档位。
+    $dark = Join-Path $env:TEMP "midikey-release-$tag-dark.png"
+    Remove-Item $dark -ErrorAction SilentlyContinue
+    $env:MIDIKEY_UI_SNAPSHOT = $dark
+    $env:MIDIKEY_UI_SNAPSHOT_MIX = 'all'
+    $env:MIDIKEY_UI_SNAPSHOT_THEME = '2'
+    $s = Start-Process -FilePath $exe -PassThru
+    [void]$s.WaitForExit(180000)
+    if ($s.ExitCode -ne 0) { throw "深色皮肤快照退出码 $($s.ExitCode)。" }
+    Remove-Item Env:\MIDIKEY_UI_SNAPSHOT, Env:\MIDIKEY_UI_SNAPSHOT_THEME -ErrorAction SilentlyContinue
+
+    foreach ($f in @($main, $keymap, $advanced, $dark)) {
         if (-not (Test-Path -LiteralPath $f)) { throw "快照没出图：$f" }
         if ((Get-Item -LiteralPath $f).Length -lt 10000) { throw "快照太小，可能是空白：$f" }
     }
-    Write-Host "   主窗 $((Get-Item $main).Length) 字节；键位窗 $((Get-Item $keymap).Length) 字节；高级窗 $((Get-Item $advanced).Length) 字节"
-    return @{ Main = $main; Keymap = $keymap; Advanced = $advanced }
+    Write-Host "   主窗 $((Get-Item $main).Length) 字节；键位窗 $((Get-Item $keymap).Length) 字节；" +
+                "高级窗 $((Get-Item $advanced).Length) 字节；深色主窗 $((Get-Item $dark).Length) 字节"
+    return @{ Main = $main; Keymap = $keymap; Advanced = $advanced; Dark = $dark }
 }
 
 # 文件夹曲目卡换歌回归：连续点三首，每步都要换过去，列表行数不能塌。
@@ -450,7 +463,7 @@ try {
         & $dotnet publish $Proj -c Release -o $plainOut -p:PublishTrimmed=false | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "不裁剪构建失败，退出码 $LASTEXITCODE。" }
         $plainShots = Invoke-Snapshot (Join-Path $plainOut 'MidiKeyPlayer.exe') 'plain'
-        foreach ($k in @('Main', 'Keymap', 'Advanced')) {
+        foreach ($k in @('Main', 'Keymap', 'Advanced', 'Dark')) {
             $a = (Get-FileHash $shots[$k] -Algorithm SHA256).Hash
             $b = (Get-FileHash $plainShots[$k] -Algorithm SHA256).Hash
             if ($a -ne $b) { throw "裁剪版与不裁剪版的 $k 快照不一致：$a / $b" }
@@ -498,6 +511,6 @@ try {
 finally {
     Pop-Location
     Remove-Item Env:\MIDIKEY_UI_SNAPSHOT, Env:\MIDIKEY_UI_SNAPSHOT_KEYMAP, Env:\MIDIKEY_UI_SNAPSHOT_MIX, `
-        Env:\MIDIKEY_UI_SNAPSHOT_MIDI, Env:\MIDIKEY_UI_SNAPSHOT_REPORT, `
+        Env:\MIDIKEY_UI_SNAPSHOT_MIDI, Env:\MIDIKEY_UI_SNAPSHOT_REPORT, Env:\MIDIKEY_UI_SNAPSHOT_THEME, `
         Env:\MIDIKEY_UI_SNAPSHOT_FOLDER, Env:\MIDIKEY_UI_SNAPSHOT_FOLDER_REPORT -ErrorAction SilentlyContinue
 }

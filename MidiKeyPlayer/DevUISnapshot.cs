@@ -23,7 +23,8 @@ internal static class DevSnapshotMode
         || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_REPORT"))
         || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_FOLDER"))
         || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_FOLDER_REPORT"))
-        || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_ADVANCED"));
+        || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_ADVANCED"))
+        || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_THEME"));
 }
 
 /// <summary>
@@ -39,6 +40,8 @@ internal static class DevSnapshotMode
 ///     载入后把左侧所有非打击乐候选按列表顺序勾进合奏（第一个 = 0 号声部）。
 /// MIDIKEY_UI_SNAPSHOT_REPORT=/path/report.txt
 ///     拍图前把「左侧每行文字颜色 ↔ 卷帘每个音符颜色」的对照表写成文本，便于逐行核对。
+/// MIDIKEY_UI_SNAPSHOT_THEME=0|1|2
+///     拍图前先切皮肤（0 自动 / 1 浅色 / 2 深色），走的是设置里那个下拉框的同一条链路。
 ///
 /// 各变量可以只设一个；全都不设则本文件无任何行为。
 /// 删本文件时记得同时删 MainWindow 里的 InstallDevSnapshot(this)。
@@ -54,9 +57,11 @@ public partial class MainWindow
         var reportPath = Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_REPORT");
         var folderProbe = Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_FOLDER");
         var advancedPath = Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_ADVANCED");
+        var themeMode = Environment.GetEnvironmentVariable("MIDIKEY_UI_SNAPSHOT_THEME");
         if (string.IsNullOrWhiteSpace(path) && string.IsNullOrWhiteSpace(keymapPath)
             && string.IsNullOrWhiteSpace(midiPath) && string.IsNullOrWhiteSpace(reportPath)
-            && string.IsNullOrWhiteSpace(folderProbe) && string.IsNullOrWhiteSpace(advancedPath)) return;
+            && string.IsNullOrWhiteSpace(folderProbe) && string.IsNullOrWhiteSpace(advancedPath)
+            && string.IsNullOrWhiteSpace(themeMode)) return;
 
         window.Opened += (_, _) =>
         {
@@ -65,9 +70,17 @@ public partial class MainWindow
             {
                 System.IO.File.AppendAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "midikey-snap.log"),
                     $"[{DateTime.Now:HH:mm:ss}] Opened；main={path ?? "(未设)"}；keymap={keymapPath ?? "(未设)"}"
-                    + $"；midi={midiPath ?? "(未设)"}；mix={mixMode ?? "(未设)"}\n");
+                    + $"；midi={midiPath ?? "(未设)"}；mix={mixMode ?? "(未设)"}；theme={themeMode ?? "(未设)"}\n");
             }
             catch { }
+
+            // 换皮肤：走设置里那个下拉框的同一条链路（用户改档位就是这个入口），
+            // 用来验证「不重启就能换色」，而不是只看启动时读设置的结果。
+            if (!string.IsNullOrWhiteSpace(themeMode) && int.TryParse(themeMode, out int themeIndex))
+            {
+                window.SetThemeForDev(themeIndex);
+                Log($"已切皮肤：档位 {themeIndex}");
+            }
 
             // 载入 MIDI 与勾选合奏都在拍图之前做完：截图看到的就是用户操作后的真实状态
             if (!string.IsNullOrWhiteSpace(midiPath))
