@@ -66,6 +66,10 @@ public partial class MainWindow : Window
     private bool _devThemeOverride;   // 【开发用】探针切皮肤中：只上色，不写设置
     private string _updateUrl = "";     // 有新版本时的下载页
     private string _updateTag = "";     // 有新版本时的版本号
+    private string _updateAssetUrl = "";   // 更新包（zip）直链；空 = 退回手动下载
+    private string _updateNewExe = "";     // 已下载且校验通过的新 exe；空 = 尚未就绪
+    private bool _updateBusy;              // 正在下载或正在应用更新
+    private CancellationTokenSource? _updateCts;
 
     /// <summary>
     /// UI-01 / UI-02：有手动改动、而且这份改动还没导出过 MIDI。
@@ -2299,16 +2303,20 @@ public partial class MainWindow : Window
     {
         try
         {
+            // 无人值守的探针 / 快照模式不查更新：不往测试环境引网络请求
+            if (PreviewProbeMode.On || DevSnapshotMode.On) return;
+
             var r = await AutoUpdate.CheckAsync(_cfg?.SkippedUpdateTag);
             if (r.Error != null || !r.HasUpdate || r.Skipped) return;
 
             _updateUrl = r.ReleaseUrl;
             _updateTag = r.LatestTag;
+            _updateAssetUrl = r.AssetUrl;
 
             UiPost(() =>
             {
                 TxtUpdate.Text = $"发现新版本 v{r.LatestTag}（当前 v{r.CurrentTag}）——" +
-                                 "点此打开下载页。";
+                                 "点此自动下载并更新；右键跳过本版本。";
                 UpdateBanner.IsVisible = true;
                 InsertLog($"发现新版本：v{r.LatestTag}（当前 v{r.CurrentTag}）　下载页：{r.ReleaseUrl}");
             });
@@ -2319,8 +2327,8 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>左键点提示条 = 打开下载页；右键点 = 跳过本版本（下个版本仍会提示）。</summary>
-    private void UpdateBanner_PointerPressed(object? sender, PointerPressedEventArgs e)
+    /// <summary>左键点提示条 = 自动下载并更新（下好后 = 重启完成更新）；右键点 = 跳过本版本。</summary>
+    private async void UpdateBanner_PointerPressed(object? sender, PointerPressedEventArgs e)
     {
         if (string.IsNullOrEmpty(_updateUrl)) return;
 
@@ -2337,8 +2345,93 @@ public partial class MainWindow : Window
             return;
         }
 
-        AutoUpdate.OpenUrl(_updateUrl);
-        InsertLog($"已打开下载页：{_updateUrl}");
+        if (_updateBusy) return;
+
+        // 更新包已下载并校验通过：这一次点击 = 重启并完成更新
+        if (_updateNewExe.Length > 0)
+        {
+            ApplyDownloadedUpdate();
+            return;
+        }
+
+        // 没有更新包直链（老 Release 或资产缺失）：退回打开下载页手动下载
+        if (_updateAssetUrl.Length == 0)
+        {
+            AutoUpdate.OpenUrl(_updateUrl);
+            InsertLog($"已打开下载页：{_updateUrl}");
+            return;
+        }
+
+        await DownloadUpdateAsync();
+    }
+
+    /// <summary>下载更新包并校验。完成后提示条变成「点此重启完成更新」；失败时可再点重试。</summary>
+    private async Task DownloadUpdateAsync()
+    {
+        _updateBusy = true;
+        _updateCts = new CancellationTokenSource();
+        TxtUpdate.Text = $"正在下载 v{_updateTag} …… 0%";
+        InsertLog($"开始下载更新包：{_updateAssetUrl}");
+
+        int lastPct = -1;
+        var progress = new Progress<double>(p =>
+        {
+            int pct = (int)Math.Round(p * 100);
+            if (pct == lastPct) return;
+            lastPct = pct;
+            TxtUpdate.Text = $"正在下载 v{_updateTag} …… {pct}%";
+        });
+
+        string? zip = await AutoUpdate.DownloadAsync(_updateAssetUrl, progress, _updateCts.Token);
+        if (zip == null)
+        {
+            _updateBusy = false;
+            // 关程序触发的取消不刷新提示条（窗口已经在关）
+            if (!_updateCts.IsCancellationRequested)
+            {
+                TxtUpdate.Text = "更新包下载失败——点此重试；右键跳过本版本。";
+                InsertLog("更新包下载失败，详见 play.log。也可以点提示条重试，或去下载页手动下载。");
+            }
+            return;
+        }
+
+        string? newExe = AutoUpdate.ExtractNewExe(zip);
+        if (newExe == null)
+        {
+            _updateBusy = false;
+            TxtUpdate.Text = "更新包校验失败——点此重试；右键跳过本版本。";
+            InsertLog("更新包校验失败，详见 play.log。也可以点提示条重试，或去下载页手动下载。");
+            return;
+        }
+
+        _updateNewExe = newExe;
+        _updateBusy = false;
+        TxtUpdate.Text = $"v{_updateTag} 已下载完成——点此重启并完成更新；右键跳过本版本。";
+        InsertLog($"v{_updateTag} 更新包已就绪，重启程序后生效。");
+    }
+
+    /// <summary>启动更新脚本并退出程序：脚本等本进程退出后覆盖 exe 并重启到新版。</summary>
+    private void ApplyDownloadedUpdate()
+    {
+        // 有未导出的卷帘改动时不直接退出（UI-02 的口径：改动只存在内存里，退出就没了）
+        if (HasUnexportedEdits)
+        {
+            TxtUpdate.Text = "有未导出的卷帘改动：请先「导出 MIDI…」保存，再点这里更新。";
+            return;
+        }
+        _updateBusy = true;
+        if (!AutoUpdate.StartUpdater(_updateNewExe))
+        {
+            _updateBusy = false;
+            _updateNewExe = "";
+            _updateAssetUrl = "";   // 自动更新走不通，退回手动：下次点击打开下载页
+            TxtUpdate.Text = "自动更新启动失败——点此打开下载页手动下载；右键跳过本版本。";
+            InsertLog("自动更新启动失败，详见 play.log。");
+            return;
+        }
+        InsertLog("正在应用更新：程序将退出并自动重启到新版……");
+        if (_engine != null) StopPlaybackNow();
+        Close();
     }
 
     /// <summary>输入兼容档位：只影响下一次开始播放时的事件时序，不需要刷新预览。</summary>
@@ -3235,6 +3328,7 @@ public partial class MainWindow : Window
     /// </summary>
     internal void DevCleanUpForExit()
     {
+        _updateCts?.Cancel();   // 退出时取消进行中的更新包下载
         _countdownTimer?.Stop();
         _liveTimer?.Stop();
         _uiTimer?.Stop();

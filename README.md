@@ -12,7 +12,7 @@
 ## 下载
 
 1. 打开右侧 **Releases**。
-2. 下载 `MidiKeyPlayer-win-x64-<版本>.zip`。当前是 `MidiKeyPlayer-win-x64-1.0.1.zip`，约 17 MB。
+2. 下载 `MidiKeyPlayer-win-x64-<版本>.zip`（取最新版本号），约 17 MB。
 3. 解压。里面有 `MidiKeyPlayer.exe`（约 23 MB）与 `更新日志.txt`。
 4. 双击 `MidiKeyPlayer.exe`。
 5. 系统弹出 UAC，选「是」。
@@ -328,9 +328,15 @@ tag 已存在，脚本直接停手。日志里没有当前版本号那一节，`
 
 ## 自动更新
 
-启动时的更新检查**默认开启**（仓库已公开，v1.0.9 起）。有新版时界面提示并可跳转 Release 页。
+启动时后台检查新版本（默认开启，v1.0.10 起支持自动下载）。发现新版时窗口顶部出现提示条：
 
-源码在 `MidiKeyPlayer/Engine/AutoUpdate.cs`。要关掉检查，把 `Enabled` 改成 `false`。
+- **左键点提示条**：自动下载更新包并显示进度；下载完成后再点一次，程序退出、自动覆盖旧文件并重启到新版。
+- **右键点提示条**：跳过这个版本，下个版本仍会提示。
+- 下载失败或校验失败时点提示条可重试；没有更新包直链时退回「打开下载页」手动下载。
+- 更新前如果卷帘里有未导出的改动，会提示先导出 MIDI。
+
+更新包只从本仓库的 Releases 下载（地址白名单），并校验包内 exe 完整后才替换。
+要关掉检查，把 `MidiKeyPlayer/Engine/AutoUpdate.cs` 里的 `Enabled` 改成 `false`。
 
 ## 设置迁移
 

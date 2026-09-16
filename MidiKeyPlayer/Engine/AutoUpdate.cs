@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 
 namespace MidiKeyPlayer.Engine;
@@ -58,6 +60,8 @@ public static class AutoUpdate
         public string CurrentTag { get; init; } = "";
         public string ReleaseName { get; init; } = "";
         public string ReleaseUrl { get; init; } = "";
+        /// <summary>更新包（zip）直链；找不到或地址不在白名单时为空串，界面退回手动下载。</summary>
+        public string AssetUrl { get; init; } = "";
         public bool Skipped { get; init; }       // 用户选了"跳过这个版本"
         public string? Error { get; init; }      // 网络失败等（静默处理，不打扰用户）
     }
@@ -93,6 +97,26 @@ public static class AutoUpdate
             if (html.Length > 0 && !IsAllowedUrl(html))
                 Persist.LogFile.Append($"[更新] 接口返回的地址不在白名单，改用 Releases 页：{html}");
 
+            // 更新包直链：从 Release 资产里找 MidiKeyPlayer-win-x64-*.zip，
+            // 地址同样要过白名单（只认本仓库 releases/download/ 前缀），找不到就是空串，
+            // 界面据此退回「打开下载页」的手动流程。
+            string assetUrl = "";
+            if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var a in assets.EnumerateArray())
+                {
+                    string an = a.TryGetProperty("name", out var anp) ? (anp.GetString() ?? "") : "";
+                    string au = a.TryGetProperty("browser_download_url", out var aup) ? (aup.GetString() ?? "") : "";
+                    if (an.StartsWith("MidiKeyPlayer-win-x64-", StringComparison.OrdinalIgnoreCase) &&
+                        an.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) &&
+                        IsAllowedAssetUrl(au))
+                    {
+                        assetUrl = au;
+                        break;
+                    }
+                }
+            }
+
             bool newer = IsNewer(tag, CurrentVersion);
             return new Result
             {
@@ -101,6 +125,7 @@ public static class AutoUpdate
                 CurrentTag = CurrentVersion,
                 ReleaseName = name,
                 ReleaseUrl = IsAllowedUrl(html) ? html : ReleasesUrl,
+                AssetUrl = assetUrl,
                 Skipped = newer && !string.IsNullOrEmpty(skippedTag) &&
                           string.Equals(tag.TrimStart('v', 'V'), skippedTag.TrimStart('v', 'V'),
                                         StringComparison.OrdinalIgnoreCase)
@@ -153,6 +178,186 @@ public static class AutoUpdate
         {
             // 打不开就算了，界面上也会把链接文字显示出来供手动复制；失败原因写日志
             Persist.LogFile.Append($"[更新] 打开链接失败（{url}）：{ex.Message}");
+        }
+    }
+
+    // ================= 自动下载与替换 =================
+
+    /// <summary>允许下载的更新包地址前缀：只认本仓库的 releases/download/。</summary>
+    private static string AssetUrlPrefix => $"https://github.com/{Owner}/{Repo}/releases/download/";
+
+    /// <summary>更新包地址是否合法（白名单前缀，且必须是 https）。</summary>
+    private static bool IsAllowedAssetUrl(string url)
+        => !string.IsNullOrEmpty(url) && url.StartsWith(AssetUrlPrefix, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>下载与解包目录：%LOCALAPPDATA%\MidiKeyPlayer\update。</summary>
+    private static string UpdateDir => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "MidiKeyPlayer", "update");
+
+    /// <summary>
+    /// 把更新包下载到本地（<see cref="UpdateDir"/>）。返回 zip 路径；失败或被取消返回 null（原因写日志）。
+    /// 只允许白名单里的本仓库资产地址。先写 .part 临时文件、下完再改名：
+    /// 中途断网/关程序留下的半截文件不会被当成完整包。
+    /// </summary>
+    public static async Task<string?> DownloadAsync(string url, IProgress<double>? progress = null,
+                                                    CancellationToken ct = default)
+    {
+        if (!IsAllowedAssetUrl(url))
+        {
+            Persist.LogFile.Append($"[更新] 拒绝下载白名单外的地址：{url}");
+            return null;
+        }
+        try
+        {
+            Directory.CreateDirectory(UpdateDir);
+            string dest = Path.Combine(UpdateDir, Path.GetFileName(url.Split('?')[0]));
+            string part = dest + ".part";
+
+            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("MidiKeyPlayer-UpdateCheck");
+            using var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct)
+                                         .ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode)
+            {
+                Persist.LogFile.Append($"[更新] 下载失败：HTTP {(int)resp.StatusCode}");
+                return null;
+            }
+
+            long? total = resp.Content.Headers.ContentLength;
+            await using (var src = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false))
+            await using (var dst = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                var buf = new byte[64 * 1024];
+                long got = 0;
+                int n;
+                while ((n = await src.ReadAsync(buf, ct).ConfigureAwait(false)) > 0)
+                {
+                    await dst.WriteAsync(buf.AsMemory(0, n), ct).ConfigureAwait(false);
+                    got += n;
+                    if (total is > 0) progress?.Report(Math.Clamp((double)got / total.Value, 0, 1));
+                }
+            }
+            File.Move(part, dest, overwrite: true);
+            return dest;
+        }
+        catch (OperationCanceledException)
+        {
+            return null;   // 关程序时取消：正常路径，不写日志
+        }
+        catch (Exception ex)
+        {
+            Persist.LogFile.Append($"[更新] 下载异常：{ex.GetType().Name}: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 校验更新包并解出新 exe：包内必须有 MidiKeyPlayer.exe 与 更新日志.txt；
+    /// exe 必须是 PE（MZ 头）且大于 5 MB。返回解出的新 exe 路径；校验不过返回 null（原因写日志）。
+    /// </summary>
+    public static string? ExtractNewExe(string zipPath)
+    {
+        try
+        {
+            using var zip = System.IO.Compression.ZipFile.OpenRead(zipPath);
+            var exeEntry = zip.Entries.FirstOrDefault(e =>
+                string.Equals(e.FullName, "MidiKeyPlayer.exe", StringComparison.OrdinalIgnoreCase));
+            bool hasChangelog = zip.Entries.Any(e =>
+                e.FullName.EndsWith("更新日志.txt", StringComparison.Ordinal));
+            if (exeEntry == null || !hasChangelog)
+            {
+                Persist.LogFile.Append(
+                    $"[更新] 更新包内容不符（条目：{string.Join(", ", zip.Entries.Select(e => e.FullName))}）");
+                return null;
+            }
+
+            string dest = Path.Combine(UpdateDir, "MidiKeyPlayer.new.exe");
+            exeEntry.ExtractToFile(dest, overwrite: true);
+
+            var fi = new FileInfo(dest);
+            bool ok = fi.Length >= 5 * 1024 * 1024;
+            if (ok)
+            {
+                using var fs = File.OpenRead(dest);
+                ok = fs.ReadByte() == 'M' && fs.ReadByte() == 'Z';
+            }
+            if (!ok)
+            {
+                Persist.LogFile.Append($"[更新] 解出的 exe 校验不过（{fi.Length} 字节），按损坏处理。");
+                try { File.Delete(dest); } catch { }
+                return null;
+            }
+            return dest;
+        }
+        catch (Exception ex)
+        {
+            Persist.LogFile.Append($"[更新] 更新包校验失败：{ex.GetType().Name}: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 启动更新脚本并返回 true：脚本等本进程退出后，把新 exe 覆盖到当前程序路径并重启新版。
+    /// 调用方随后应当走正常退出流程（保存设置、松按键、注销热键）。
+    /// 当前 exe 路径取不到、新 exe 不存在时不写脚本，返回 false。
+    /// </summary>
+    public static bool StartUpdater(string newExePath)
+    {
+        try
+        {
+            string target = Environment.ProcessPath ?? "";
+            if (target.Length == 0 || !File.Exists(target))
+            {
+                Persist.LogFile.Append("[更新] 取不到当前 exe 路径，不能自动更新。");
+                return false;
+            }
+            if (!File.Exists(newExePath))
+            {
+                Persist.LogFile.Append($"[更新] 新 exe 不存在：{newExePath}");
+                return false;
+            }
+
+            Directory.CreateDirectory(UpdateDir);
+            string scriptPath = Path.Combine(UpdateDir, "apply-update.ps1");
+            string Esc(string s) => s.Replace("'", "''");
+            string script = string.Join("\r\n", new[]
+            {
+                "$ErrorActionPreference = 'SilentlyContinue'",
+                $"$target = '{Esc(target)}'",
+                $"$new    = '{Esc(newExePath)}'",
+                $"$appPid = {Environment.ProcessId}",
+                // 等主程序退出（保存设置、松按键、注销热键都在退出流程里）
+                "try { Wait-Process -Id $appPid -Timeout 180 -ErrorAction Stop } catch {}",
+                "Start-Sleep -Milliseconds 500",
+                // exe 文件可能还被系统占用一小会：重试一分钟
+                "$ok = $false",
+                "for ($i = 0; $i -lt 120; $i++) {",
+                "    try { Copy-Item -LiteralPath $new -Destination $target -Force -ErrorAction Stop; $ok = $true; break }",
+                "    catch { Start-Sleep -Milliseconds 500 }",
+                "}",
+                "if ($ok) {",
+                "    Remove-Item -LiteralPath $new -Force",
+                "    Start-Process -FilePath $target",
+                "}",
+                "Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force",
+            });
+            // Windows PowerShell 5.1 按 BOM 判断脚本编码：写 UTF-8 BOM，路径里的中文才不乱码
+            File.WriteAllText(scriptPath, script, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = $"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{scriptPath}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            });
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Persist.LogFile.Append($"[更新] 启动更新脚本失败：{ex.GetType().Name}: {ex.Message}");
+            return false;
         }
     }
 }
