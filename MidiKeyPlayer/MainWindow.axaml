@@ -4,7 +4,8 @@
         x:Class="MidiKeyPlayer.MainWindow"
         Title="MIDI 按键播放器"
         Width="1120" Height="960"
-        MinWidth="980" MinHeight="820"
+        MinWidth="980" MinHeight="600"
+        SizeToContent="Manual"
         CanResize="True" CanMaximize="True"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource BrushCanvas}"
@@ -50,11 +51,16 @@
        那里是 StaticResource，解析时不认主题变体，只有一套颜色。 -->
 
   <!-- 主窗口必须允许拖边和最大化：默认尺寸只提供首次打开时的舒适布局，不能把用户的屏幕高度锁死。
-       820 是卷帘在紧凑布局下仍能保留最基本操作区的下限；超过这个高度由中间的 * 行自动吸收。 -->
+       窗口可缩到 600；内容仍按 820 的紧凑布局排版，空间不足时由外层滚动条提供访问，
+       这样小屏不会再把底部设置压到任务栏下。SizeToContent 显式保持 Manual，避免内容尺寸反过来锁住用户的拖拽。 -->
   <Grid>
 
-    <!-- 左：文件/轨道；右：演奏控制 -->
-    <DockPanel Margin="14">
+    <!-- 左：文件/轨道；右：演奏控制。
+         DockPanel 的内容在较矮屏幕上可能超过可用工作区；若直接让它参与窗口布局，
+         Windows 会把窗口卡在屏幕边界，底部控件既看不见也无法调整。
+         用 ScrollViewer 保留原有左右伸缩规则，并在高度不足时只滚动主内容。 -->
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+    <DockPanel Margin="14" MinHeight="820">
 
     <!-- 最近一条消息。原来的一整块日志列表已经去掉：占地，且用户基本不看。
          完整历史仍然写进 %LOCALAPPDATA%\MidiKeyPlayer\play.log。 -->
@@ -514,7 +520,8 @@
 
       </StackPanel>
     </Grid>
-  </DockPanel>
+    </DockPanel>
+    </ScrollViewer>
 
   <!-- ================= 设置窗口「常规」页的实体内容（不在主界面显示） =================
        这块内容由「设置…」按钮搬进 SettingsWindow 的常规页显示，关窗再搬回来。
