@@ -63,7 +63,6 @@ $BuildSh    = Join-Path $RepoRoot 'MidiKeyPlayer\build-win.sh'
 $SelfTest   = Join-Path $PSScriptRoot 'run-selftest.ps1'
 $SampleMidi = Join-Path $RepoRoot '示例MIDI\示例3-铃儿响叮当-三音轨.mid'
 $Utf8NoBom  = New-Object System.Text.UTF8Encoding($false)
-$Utf8Bom    = New-Object System.Text.UTF8Encoding($true)
 
 function Write-Step([string]$text) { Write-Host ">> $text" }
 
@@ -422,7 +421,8 @@ try {
     [void](Invoke-Git add -A)
     $commitMsg = "发布 v$next`n`n" + ($lines -join "`n")
     $msgFile = Join-Path $env:TEMP "midikey-commit-$next.txt"
-    [System.IO.File]::WriteAllText($msgFile, $commitMsg, $Utf8Bom)
+    # 不带 BOM：git 默认按 UTF-8 读提交信息。带 BOM 会在标题最前面留一个零宽字符。
+    [System.IO.File]::WriteAllText($msgFile, $commitMsg, $Utf8NoBom)
     [void](Invoke-Git commit -F $msgFile)
     [void](Invoke-Git push origin main)
     [void](Invoke-Git tag -a $tag -m "MidiKeyPlayer v$next")
