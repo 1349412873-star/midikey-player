@@ -45,6 +45,7 @@ public sealed class AppConfig
     public bool TrimLead { get; set; } = true;        // 去除开头空拍（首音平移到 0 秒）
     public bool FirstRunDone { get; set; } = false;   // 首次“快速上手”是否已看过
     public bool AutoMinimizeOnPlay { get; set; } = true;  // 播放开始后自动最小化窗口
+    public bool ShowPreflight { get; set; } = true;   // 主界面状态卡里显示播放前自检（默认开）
     public int TimingIndex { get; set; } = 1;         // 输入兼容档位：0稳健/1标准/2极限
     public string SkippedUpdateTag { get; set; } = "";   // 用户选择“跳过”的版本号（空=不跳过）
 

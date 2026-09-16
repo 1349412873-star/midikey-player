@@ -1,10 +1,10 @@
-<Window xmlns="https://github.com/avaloniaui"
+﻿<Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:MidiKeyPlayer"
         x:Class="MidiKeyPlayer.MainWindow"
         Title="MIDI 按键播放器"
-        Width="1120" Height="920"
-        MinWidth="980" MinHeight="820"
+        Width="1120" Height="960"
+        MinWidth="980" MinHeight="880"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource BrushCanvas}"
         FontFamily="{DynamicResource FontUi}"
@@ -263,6 +263,32 @@
                        FontSize="{DynamicResource FontSmall}" FontWeight="SemiBold"
                        Foreground="{DynamicResource BrushWarn}"
                        Text="⚠ 有未导出的手动改动：改动只在内存里，换歌或关窗会丢弃。请先点「导出 MIDI…」保存。"/>
+
+            <!-- 播放前自检：通过打勾、未通过打叉。这块原来收在设置的「常规」页里，
+                 新人根本看不到；现在常驻在主界面状态卡里。不想要就在设置里关掉
+                 （AppConfig.ShowPreflight，默认开）。控件只有这一份，设置页只留开关。 -->
+            <StackPanel x:Name="PreflightRow" Spacing="2" Margin="0,6,0,0">
+              <Border BorderThickness="0,1,0,0" BorderBrush="{DynamicResource BrushBorder}" Margin="0,0,0,5"/>
+              <WrapPanel HorizontalAlignment="Center" ItemSpacing="14" LineSpacing="4">
+                <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center"
+                            ToolTip.Tip="模拟按键受 Windows 的 UIPI 限制：目标程序若以管理员运行而本程序不是，按键会被系统拦截">
+                  <TextBlock x:Name="TxtCheckAdminMark" Text="–" FontSize="{DynamicResource FontBody}" FontWeight="Bold"
+                             Foreground="{DynamicResource BrushTextMuted}" VerticalAlignment="Center"/>
+                  <TextBlock x:Name="TxtCheckAdmin" Text="管理员" FontSize="{DynamicResource FontSmall}" VerticalAlignment="Center"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center"
+                            ToolTip.Tip="只有输入法开着并且处于中文/假名输入状态时才会截走按键。中文键盘布局切到英文模式可以直接用，不会误报">
+                  <TextBlock x:Name="TxtCheckImeMark" Text="–" FontSize="{DynamicResource FontBody}" FontWeight="Bold"
+                             Foreground="{DynamicResource BrushTextMuted}" VerticalAlignment="Center"/>
+                  <TextBlock x:Name="TxtCheckIme" Text="输入法" FontSize="{DynamicResource FontSmall}" VerticalAlignment="Center"/>
+                </StackPanel>
+                <Button x:Name="BtnRecheck" Content="刷新" FontSize="{DynamicResource FontCaption}" Padding="10,3"
+                        Classes="secondary" VerticalAlignment="Center" Click="BtnRecheck_Click"
+                        ToolTip.Tip="重新检测管理员权限与输入法状态（切换中英文模式后点一下即可）"/>
+              </WrapPanel>
+              <TextBlock x:Name="TxtCheckHint" IsVisible="False" Classes="caption"
+                         Foreground="{DynamicResource BrushWarn}" TextAlignment="Center" TextWrapping="Wrap"/>
+            </StackPanel>
           </StackPanel>
         </Border>
       </StackPanel>
@@ -399,88 +425,97 @@
         </Grid>
       </Border>
 
-      <!-- ================= 选项区 =================
-           常驻的只有常用那几行（速度 / 移调 / 一键移调 / 自然音最多 / 倒计时 /
-           去除开头空拍 / 播放后自动最小化 / 键位设置）；十几项不常改的设置收进下面的
-           「高级」Expander，默认收起。右栏因此明显变短，卷帘分到的高度变多。
-           控件名、顺序、ToolTip、事件处理器一律没改，代码里的引用照旧。 -->
+      <!-- ================= 选项区（主界面右下角） =================
+           原来整块是一张卡三行：速度/移调/设置入口挤在头一行，两个移调按钮独占一行却半空着，
+           倒计时与两个勾选框又混在第三行 —— 一眼看不出哪几个管「怎么弹」、哪几个会改谱子。
+           现在按「动的是什么」拆成两张卡，每张卡一行小标题：
+
+             · 演奏参数：速度、移调、倒计时、播放后自动最小化 —— 只影响怎么弹，不改谱面；
+             · 谱面调整：一键移调、自然音最多、去除开头空拍 —— 都会改谱面，卷帘里看得到。
+
+           卡内用两列网格对齐：左列速度、倒计时，右列移调、播放后最小化，行与行的控件对得上。
+           设置入口挪进标题行右端，方案名就贴在它左边（原来孤零零挂在滑块后面，看不出是什么）。
+           控件名、ToolTip、事件处理器一律没改，代码里的引用照旧。 -->
       <StackPanel x:Name="OptionsArea" Grid.Row="2" Spacing="8" Margin="{DynamicResource CardGap}">
 
-        <!-- 常用项一张卡，三行：
-              1. 速度、移调（都是「让这份谱子怎么响」），右端是设置入口 + 当前方案名；
-              2. 一键移调、自然音最多（改谱子的动作，单独一行，不和设置挤在一起）；
-              3. 倒计时、去空拍、播放后最小化（演奏参数）。
-            滑块收窄到 96：原来 126 宽，加上两个按钮会折行，折出来一行只有一个按钮，很难看。 -->
+        <!-- 卡 1：演奏参数 -->
         <Border Classes="card" Padding="14,10">
           <StackPanel Spacing="8">
 
-            <!-- 第 1 行：速度 / 移调 + 右端的设置入口 -->
+            <!-- 标题行：左=卡名，右=当前键位方案名 + 设置入口 -->
             <Grid ColumnDefinitions="*,Auto">
-              <WrapPanel Grid.Column="0" ItemSpacing="16" LineSpacing="8">
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                  <TextBlock Text="速度" Classes="label" MinWidth="34"/>
-                  <Slider x:Name="SliderSpeed" Width="96" Minimum="10" Maximum="400" Value="100"
-                          TickFrequency="5" IsSnapToTickEnabled="True" ValueChanged="SpeedChanged"
-                          VerticalAlignment="Center"
-                          ToolTip.Tip="10% = 慢速练习，400% = 快速过谱（引擎支持 10%–400%）"/>
-                  <TextBlock x:Name="TxtSpeed" Text="100%" Classes="value" Width="42"/>
-                </StackPanel>
-
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                  <TextBlock Text="移调" Classes="label" MinWidth="34"/>
-                  <Slider x:Name="SliderTranspose" Width="96" Minimum="-24" Maximum="24" Value="0"
-                          TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="SpeedChanged"
-                          VerticalAlignment="Center"
-                          ToolTip.Tip="±24 半音（±2 个八度），与设置层、实时演奏同口径"/>
-                  <TextBlock x:Name="TxtTranspose" Text="0" Classes="value" Width="30"/>
-                </StackPanel>
-              </WrapPanel>
-
-              <!-- 设置入口：一键打开，两页——常规与键位。左边是当前键位方案名 -->
+              <TextBlock Grid.Column="0" Text="演奏参数" Classes="sectionLabel"
+                         FontSize="{DynamicResource FontSmall}" FontWeight="SemiBold"
+                         VerticalAlignment="Center"/>
               <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                 <TextBlock x:Name="TxtKeymapName" Classes="caption" MaxWidth="120" VerticalAlignment="Center"
                            TextTrimming="CharacterEllipsis" ToolTip.Tip="当前键位方案名"/>
                 <Button x:Name="BtnSettings" Content="设置…" FontSize="{DynamicResource FontSmall}"
                         Padding="14,5" Classes="secondary" VerticalAlignment="Center" Click="Settings_Click"
-                        ToolTip.Tip="打开设置：常规（设备、兼容、热键、导出、自检）与键位（方案、按键绑定、功能键）两页"/>
+                        ToolTip.Tip="打开设置：常规（设备、兼容、热键、导出、主界面显示）与键位（方案、按键绑定、功能键）两页"/>
               </StackPanel>
             </Grid>
 
-            <!-- 第 2 行：改谱子的两个动作。与设置入口分开：这两个动的是谱面，设置动的是程序 -->
-            <WrapPanel ItemSpacing="16" LineSpacing="8">
-              <Button x:Name="BtnAutoTranspose" Content="一键移调" FontSize="{DynamicResource FontSmall}"
-                      Padding="12,5" Classes="secondary" VerticalAlignment="Center"
-                      Click="BtnAutoTranspose_Click"
-                      ToolTip.Tip="自动移调，让没有对应键的音最少（这些音会跳过不弹，卷帘里画成灰色）"/>
+            <!-- 两列网格：左列 = 速度 / 倒计时，右列 = 移调 / 播放后最小化。两行等距 -->
+            <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto" RowSpacing="6">
+              <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="速度" Classes="label" MinWidth="34" VerticalAlignment="Center"/>
+                <Slider x:Name="SliderSpeed" Width="96" Minimum="10" Maximum="400" Value="100"
+                        TickFrequency="5" IsSnapToTickEnabled="True" ValueChanged="SpeedChanged"
+                        VerticalAlignment="Center"
+                        ToolTip.Tip="10% = 慢速练习，400% = 快速过谱（引擎支持 10%–400%）"/>
+                <TextBlock x:Name="TxtSpeed" Text="100%" Classes="value" Width="42" VerticalAlignment="Center"/>
+              </StackPanel>
 
-              <Button x:Name="BtnNaturalTranspose" Content="自然音最多" FontSize="{DynamicResource FontSmall}"
-                      Padding="12,5" Classes="secondary" VerticalAlignment="Center"
-                      Click="BtnNaturalTranspose_Click"
-                      ToolTip.Tip="自动移调，让最多音落在自然音上（口琴等没有半音键的乐器用）。自然音同样多时取没有对应键的更少"/>
-            </WrapPanel>
+              <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="8" Margin="16,0,0,0">
+                <TextBlock Text="移调" Classes="label" MinWidth="34" VerticalAlignment="Center"/>
+                <Slider x:Name="SliderTranspose" Width="96" Minimum="-24" Maximum="24" Value="0"
+                        TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="SpeedChanged"
+                        VerticalAlignment="Center"
+                        ToolTip.Tip="±24 半音（±2 个八度），与设置层、实时演奏同口径"/>
+                <TextBlock x:Name="TxtTranspose" Text="0" Classes="value" Width="30" VerticalAlignment="Center"/>
+              </StackPanel>
 
-            <!-- 第 3 行：演奏参数 -->
-            <WrapPanel ItemSpacing="22" LineSpacing="8">
-            <StackPanel Orientation="Horizontal" Spacing="8">
-              <TextBlock Text="倒计时" Classes="label" MinWidth="46"/>
-              <ComboBox x:Name="CountdownCombo" Width="104" FontSize="{DynamicResource FontSmall}" SelectedIndex="1"
-                        VerticalAlignment="Center" SelectionChanged="CountdownCombo_Changed"/>
-            </StackPanel>
+              <StackPanel Grid.Row="1" Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="倒计时" Classes="label" MinWidth="46" VerticalAlignment="Center"/>
+                <ComboBox x:Name="CountdownCombo" Width="104" FontSize="{DynamicResource FontSmall}" SelectedIndex="1"
+                          VerticalAlignment="Center" SelectionChanged="CountdownCombo_Changed"
+                          ToolTip.Tip="点播放后等几秒才开始发按键：这段时间用来切到目标程序、装备乐器"/>
+              </StackPanel>
 
-            <!-- 「去除开头空拍」原本在左栏底部独占一张卡，现在只有它一个选项了，
-                 合并到「演奏参数」这一行更省地方，也不再多一张孤零零的小卡。 -->
+              <!-- 「播放后自动最小化」只决定开始播放时缩不缩窗，不改谱面 -->
+              <CheckBox Grid.Row="1" Grid.Column="1" x:Name="ChkAutoMinimize" Content="播放后自动最小化窗口"
+                        FontSize="{DynamicResource FontSmall}" Margin="16,0,0,0"
+                        IsChecked="True" VerticalAlignment="Center"
+                        ToolTip.Tip="播放后窗口最小化。不勾选则保持原样（副屏看进度用，记得点一下目标窗口）"
+                        IsCheckedChanged="AutoMinimize_Changed"/>
+            </Grid>
+          </StackPanel>
+        </Border>
+
+        <!-- 卡 2：谱面调整。三个动作都会改当前谱面，与「演奏参数」分开。
+             卡名与控件同一行：这张卡只有一行控件，再占一行标题就是白花竖排空间（卷帘要用）。 -->
+        <Border Classes="card" Padding="14,10">
+          <WrapPanel ItemSpacing="16" LineSpacing="8">
+            <TextBlock Text="谱面调整" Classes="sectionLabel" MinWidth="52"
+                       FontSize="{DynamicResource FontSmall}" FontWeight="SemiBold"
+                       VerticalAlignment="Center"/>
+            <Button x:Name="BtnAutoTranspose" Content="一键移调" FontSize="{DynamicResource FontSmall}"
+                    Padding="12,5" Classes="secondary" VerticalAlignment="Center"
+                    Click="BtnAutoTranspose_Click"
+                    ToolTip.Tip="自动移调，让没有对应键的音最少（这些音会跳过不弹，卷帘里画成灰色）"/>
+
+            <Button x:Name="BtnNaturalTranspose" Content="自然音最多" FontSize="{DynamicResource FontSmall}"
+                    Padding="12,5" Classes="secondary" VerticalAlignment="Center"
+                    Click="BtnNaturalTranspose_Click"
+                    ToolTip.Tip="自动移调，让最多音落在自然音上（口琴等没有半音键的乐器用）。自然音同样多时取没有对应键的更少"/>
+
+            <!-- 「去除开头空拍」会把整条旋律往前挪，属于改谱面 -->
             <CheckBox x:Name="ChkTrimLead" Content="去除开头空拍" FontSize="{DynamicResource FontSmall}"
                       IsChecked="True" VerticalAlignment="Center"
                       ToolTip.Tip="剪掉开头的休止，让旋律从第 0 秒开始。注意它会把整条旋律往前挪，卷帘左下角会标出剪掉了多少秒"
                       IsCheckedChanged="Option_Changed"/>
-
-            <!-- 「播放后自动最小化」是演奏行为，跟着本行，不跟谱面走 -->
-            <CheckBox x:Name="ChkAutoMinimize" Content="播放后自动最小化窗口" FontSize="{DynamicResource FontSmall}"
-                      IsChecked="True" VerticalAlignment="Center"
-                      ToolTip.Tip="播放后窗口最小化。不勾选则保持原样（副屏看进度用，记得点一下目标窗口）"
-                      IsCheckedChanged="AutoMinimize_Changed"/>
-            </WrapPanel>
-          </StackPanel>
+          </WrapPanel>
         </Border>
 
       </StackPanel>
@@ -607,30 +642,18 @@
         </StackPanel>
       </Border>
 
-      <!-- 播放前自检：通过打勾、未通过打叉。原来是主界面常驻的一小块，现在跟着高级设置走。 -->
+      <!-- 播放前自检在主界面状态卡里常驻显示（见上面的 PreflightRow）。
+           这里只留一个开关：不想要的人可以关掉，默认开。 -->
       <Border Classes="card" Padding="14,10">
         <StackPanel Spacing="4">
-          <WrapPanel ItemSpacing="16" LineSpacing="6">
-            <TextBlock Text="播放前自检" Classes="sectionLabel" FontSize="{DynamicResource FontSmall}"
-                       FontWeight="SemiBold" VerticalAlignment="Center"/>
-            <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center"
-                        ToolTip.Tip="模拟按键受 Windows 的 UIPI 限制：目标程序若以管理员运行而本程序不是，按键会被系统拦截">
-              <TextBlock x:Name="TxtCheckAdminMark" Text="–" FontSize="{DynamicResource FontBody}" FontWeight="Bold"
-                         Foreground="{DynamicResource BrushTextMuted}" VerticalAlignment="Center"/>
-              <TextBlock x:Name="TxtCheckAdmin" Text="管理员" FontSize="{DynamicResource FontSmall}" VerticalAlignment="Center"/>
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center"
-                        ToolTip.Tip="只有输入法开着并且处于中文/假名输入状态时才会截走按键。中文键盘布局切到英文模式可以直接用，不会误报">
-              <TextBlock x:Name="TxtCheckImeMark" Text="–" FontSize="{DynamicResource FontBody}" FontWeight="Bold"
-                         Foreground="{DynamicResource BrushTextMuted}" VerticalAlignment="Center"/>
-              <TextBlock x:Name="TxtCheckIme" Text="输入法" FontSize="{DynamicResource FontSmall}" VerticalAlignment="Center"/>
-            </StackPanel>
-            <Button x:Name="BtnRecheck" Content="刷新" FontSize="{DynamicResource FontCaption}" Padding="10,3"
-                    Classes="secondary" VerticalAlignment="Center" Click="BtnRecheck_Click"
-                    ToolTip.Tip="重新检测管理员权限与输入法状态（切换中英文模式后点一下即可）"/>
-          </WrapPanel>
-          <TextBlock x:Name="TxtCheckHint" Classes="caption" Foreground="{DynamicResource BrushWarn}"
-                     TextWrapping="Wrap"/>
+          <TextBlock Text="主界面显示" Classes="sectionLabel" FontSize="{DynamicResource FontSmall}"
+                     FontWeight="SemiBold"/>
+          <CheckBox x:Name="ChkShowPreflight" Content="播放前自检（管理员 / 输入法）"
+                    FontSize="{DynamicResource FontSmall}" IsChecked="True" VerticalAlignment="Center"
+                    IsCheckedChanged="ShowPreflight_Changed"
+                    ToolTip.Tip="勾选时，主界面右上方的状态卡里常驻显示自检结论与「刷新」按钮。关掉后主界面不再显示这三样"/>
+          <TextBlock Classes="caption" TextWrapping="Wrap" LineHeight="19"
+                     Text="自检常驻在主界面右上方的状态卡里：管理员权限与输入法状态一目了然。这里关掉，主界面就不再显示它。"/>
         </StackPanel>
       </Border>
 

@@ -109,6 +109,8 @@ public partial class MainWindow : Window
         SliderTranspose.Value = Math.Clamp(_cfg.Transpose, -24, 24);
         ChkTrimLead.IsChecked = _cfg.TrimLead;
         ChkAutoMinimize.IsChecked = _cfg.AutoMinimizeOnPlay;
+        ChkShowPreflight.IsChecked = _cfg.ShowPreflight;
+        PreflightRow.IsVisible = _cfg.ShowPreflight;   // 默认开：自检常驻主界面状态卡
         TimingCombo.SelectedIndex = Math.Clamp(_cfg.TimingIndex, 0, 2);
         RefreshRecentUi();   // 「打开」下拉菜单按设置里的历史重建（含「最近打开」子菜单）
         // 曲目卡常驻（issue #57）：上次列过的目录还在就自动扫描并显示，不用每次重开都重新选目录
@@ -435,6 +437,7 @@ public partial class MainWindow : Window
         _cfg.ForwardHotkeyIndex = Math.Clamp(HotkeyForwardCombo.SelectedIndex, 0, 12);
         _cfg.TrimLead = ChkTrimLead.IsChecked == true;
         _cfg.AutoMinimizeOnPlay = ChkAutoMinimize.IsChecked == true;
+        _cfg.ShowPreflight = ChkShowPreflight.IsChecked == true;
         _cfg.TimingIndex = Math.Clamp(TimingCombo.SelectedIndex, 0, 2);
         _cfg.MidiDeviceName = MidiDeviceCombo.SelectedItem as string ?? "";
         if (_cfg.MidiDeviceName.StartsWith('（')) _cfg.MidiDeviceName = "";
@@ -2204,7 +2207,7 @@ public partial class MainWindow : Window
 
     // ================= 播放前自检 =================
 
-    /// <summary>播放前自检管理员权限与前台输入法，结果显示在界面状态行（✔ / ✘），不写日志。</summary>
+    /// <summary>播放前自检管理员权限与前台输入法，结论显示在主界面状态卡（✔ / ✘），明细写日志。</summary>
     private void RunPreflight()
     {
         PreflightCheck.Report report;
@@ -2220,19 +2223,23 @@ public partial class MainWindow : Window
             TxtCheckImeMark.Text = "–";
             TxtCheckImeMark.Foreground = NeutralBrush;
             TxtCheckHint.Text = "";
+            TxtCheckHint.IsVisible = false;
             return;
         }
 
         PaintCheck(report.Admin, TxtCheckAdminMark, TxtCheckAdmin);
         PaintCheck(report.Ime, TxtCheckImeMark, TxtCheckIme);
 
-        TxtCheckHint.Text = report.HasBlocked
+        // 全通过就没有要说的；留一行空文字会白占主界面状态卡的高度
+        string hint = report.HasBlocked
             ? string.Join("；", new[] { report.Admin, report.Ime }
                 .Where(c => c.Blocked)
                 .Select(c => c.Detail))
             : string.Join("；", new[] { report.Admin, report.Ime }
                 .Where(c => !c.Passed)
                 .Select(c => c.Detail));
+        TxtCheckHint.Text = hint;
+        TxtCheckHint.IsVisible = hint.Length > 0;
 
         // 输入法状态受系统影响，读不出来时把原始证据写进日志，方便远程排查
         try
@@ -2346,6 +2353,15 @@ public partial class MainWindow : Window
         ScheduleSave();
     }
 
+    /// <summary>设置里的开关：主界面状态卡是否常驻显示播放前自检（默认开）。</summary>
+    private void ShowPreflight_Changed(object? sender, RoutedEventArgs e)
+    {
+        bool on = ChkShowPreflight.IsChecked == true;
+        PreflightRow.IsVisible = on;
+        if (_cfg != null) _cfg.ShowPreflight = on;
+        ScheduleSave();
+    }
+
     // ================= 键位设置（独立窗口） =================
     //
     // 整套键位控件都在 KeymapWindow 里。这里只负责：开窗、把改动写回设置与卷帘。
@@ -2354,7 +2370,7 @@ public partial class MainWindow : Window
     /// <summary>打开「键位设置」窗口（模态）。关闭后刷新卷帘颜色、按键表与状态行。</summary>
     // ================= 设置窗口 =================
     //
-    // 设置窗口两页：常规（设备、兼容、热键、导出、自检）与键位（方案、按键绑定、功能键）。
+    // 设置窗口两页：常规（设备、兼容、热键、导出、主界面显示开关）与键位（方案、按键绑定、功能键）。
     //
     // 常规页的控件声明在 MainWindow.axaml 的 AdvancedStash 里（不可见、零尺寸），
     // 打开设置时整块交给窗口的常规页，关窗再搬回来。好处是这些控件的 x:Name 与事件处理器

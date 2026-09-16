@@ -6,10 +6,11 @@ namespace MidiKeyPlayer;
 /// <summary>
 /// 设置窗口：两页，一页「常规」，一页「键位」。
 ///
-/// - 常规页：设备接入、输入兼容、三个热键、导出按键表、播放前自检。
+/// - 常规页：设备接入、输入兼容、三个热键、导出按键表、主界面显示开关。
 ///   这些控件声明在 MainWindow.axaml 的 AdvancedStash 里，打开设置时整块交给本窗口的
 ///   AdvancedHost，关窗再还回主窗（见 <see cref="MainWindow.OpenSettings"/>）。
 ///   这样控件的 x:Name 与事件处理器全留在 MainWindow.axaml.cs，引用一行不用改。
+///   播放前自检本身不在这一页：它常驻主界面状态卡（PreflightRow），这里只有显示开关。
 /// - 键位页：方案、按键绑定、功能键。这部分原来是一个独立的「键位设置」窗口，
 ///   现在直接声明在本窗口的 XAML 里，逻辑在同类的 SettingsWindow.Keymap.cs。
 ///   合过来以后键位录入仍然挂在窗口级的 KeyDown / KeyUp 与 PointerPressed 上，
