@@ -69,8 +69,16 @@ function Write-Step([string]$text) { Write-Host ">> $text" }
 
 function Invoke-Git {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$GitArgs)
-    $out = & git -C $RepoRoot @GitArgs 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "git $($GitArgs -join ' ') 失败：`n$($out -join "`n")" }
+    # git 把进度写到 stderr（push 与 fetch 都写）。在 $ErrorActionPreference='Stop' 下，
+    # 用 2>&1 收这些行会被 PowerShell 当成错误直接抛出，所以这里临时放宽，只看退出码。
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & git -C $RepoRoot @GitArgs 2>&1
+        $code = $LASTEXITCODE
+    }
+    finally { $ErrorActionPreference = $saved }
+    if ($code -ne 0) { throw "git $($GitArgs -join ' ') 失败（退出码 $code）：`n$($out -join "`n")" }
     return $out
 }
 
@@ -390,7 +398,19 @@ try {
 
     Write-Step '发 Release'
     $body = New-ReleaseBody $next $section
-    $url = Publish-Release $next $zip $body
+    try {
+        $url = Publish-Release $next $zip $body
+    }
+    catch {
+        # 到这里提交与 tag 已经推上去了。发 Release 失败只差最后一步，不用重跑整条流程：
+        # 修好原因后手工建 Release 并传 zip，或删掉 tag 重跑。
+        Write-Host ''
+        Write-Host "发 Release 失败：$($_.Exception.Message)"
+        Write-Host "代码已经推到 main，tag $tag 也已经推上去。"
+        Write-Host "修好之后手工建 Release 并上传：$zip"
+        Write-Host "或者删掉 tag（git push origin :refs/tags/$tag）后重跑本脚本。"
+        throw
+    }
     Write-Host ''
     Write-Host "完成：$url"
 }
