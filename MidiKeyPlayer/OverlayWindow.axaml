@@ -28,13 +28,14 @@
                    HorizontalAlignment="Center"/>
       </StackPanel>
 
-      <!-- 演奏态：迷你卷帘 + 进度条 + 时间 -->
-      <StackPanel x:Name="PanelProgress" Spacing="5" Width="230" IsVisible="False">
-        <Border CornerRadius="4" Background="#22FFFFFF" Height="56"
-                ToolTip.Tip="整首曲子的迷你卷帘，黄线是播放位置">
-          <Canvas x:Name="RollCanvas" Width="230" Height="56" ClipToBounds="True">
-            <Rectangle x:Name="Playhead" Width="1.5" Height="56" Fill="#FFFFD166"
-                       Canvas.Left="0" ZIndex="1"/>
+      <!-- 演奏态：滚动迷你卷帘 + 进度条 + 时间 -->
+      <StackPanel x:Name="PanelProgress" Spacing="5" Width="250" IsVisible="False">
+        <Border CornerRadius="4" Background="#22FFFFFF" Height="90"
+                ToolTip.Tip="迷你卷帘跟着进度滚动：黄线是当前位置，右边是即将演奏的音">
+          <Canvas x:Name="RollCanvas" Width="250" Height="90" ClipToBounds="True">
+            <Canvas x:Name="RollContent"/>
+            <Rectangle x:Name="Playhead" Width="1.5" Height="90" Fill="#FFFFD166"
+                       Canvas.Left="62" ZIndex="1"/>
           </Canvas>
         </Border>
         <ProgressBar x:Name="Bar" Minimum="0" Maximum="100" Value="0" Height="5"

@@ -20,7 +20,12 @@ public partial class OverlayWindow : Window
     private static readonly IBrush NoteBrush = new SolidColorBrush(Color.Parse("#FF4CAF7D"));
     private const int MaxDrawnNotes = 2000;   // 音符太多时只画前这些，防止控件树爆炸
 
+    // 滚动窗口：可见 8 秒，播放头固定在 25% 处（左 2 秒已弹过，右 6 秒待弹）
+    private const double WindowSec = 8.0;
+    private const double PlayheadFrac = 0.25;
+
     private bool _positioned;
+    private double _pxPerSec = 1.0;   // SetNotes 时按窗口宽度算好，ShowProgress 滚动用
 
     public OverlayWindow()
     {
@@ -37,18 +42,17 @@ public partial class OverlayWindow : Window
     }
 
     /// <summary>
-    /// 摆进整首曲子的音符（开始播放时调一次）。音符按 (音高, 时间) 画进迷你卷帘，
-    /// 播放头位置由 <see cref="ShowProgress"/> 每拍更新。
+    /// 摆进整首曲子的音符（开始播放时调一次）。音符按 (音高, 时间) 画进卷帘内容层，
+    /// 横向比例固定为「8 秒可见」，播放时由 <see cref="ShowProgress"/> 平移内容层实现滚动。
     /// </summary>
     public void SetNotes(IReadOnlyList<MappedNote> notes, double totalSec)
     {
-        // 清掉旧音符（播放头保留）
-        for (int i = RollCanvas.Children.Count - 1; i >= 0; i--)
-            if (!ReferenceEquals(RollCanvas.Children[i], Playhead))
-                RollCanvas.Children.RemoveAt(i);
+        RollContent.Children.Clear();
 
         double w = RollCanvas.Width, h = RollCanvas.Height;
         double total = Math.Max(0.1, totalSec);
+        _pxPerSec = w / WindowSec;
+        Canvas.SetLeft(Playhead, w * PlayheadFrac);
         if (notes.Count == 0) return;
 
         int minP = int.MaxValue, maxP = int.MinValue;
@@ -66,24 +70,28 @@ public partial class OverlayWindow : Window
             var n = notes[i];
             var r = new Avalonia.Controls.Shapes.Rectangle
             {
-                Width = Math.Max(1.0, (n.End - n.Start) / total * w),
-                Height = Math.Max(1.0, rowH - 0.6),
+                Width = Math.Max(1.5, (n.End - n.Start) * _pxPerSec),
+                Height = Math.Max(2.0, rowH - 0.8),
                 Fill = NoteBrush,
+                RadiusX = 1,
+                RadiusY = 1,
             };
-            Canvas.SetLeft(r, Math.Max(0, n.Start) / total * w);
+            Canvas.SetLeft(r, Math.Max(0, n.Start) * _pxPerSec);
             Canvas.SetTop(r, (maxP - n.Pitch) * rowH);
-            RollCanvas.Children.Add(r);
+            RollContent.Children.Add(r);
         }
     }
 
-    /// <summary>显示演奏进度：播放头跟着走，右下角标「已暂停 / 第 N 遍」。</summary>
+    /// <summary>显示演奏进度：内容层向左滚动，播放头固定在 25% 处。</summary>
     public void ShowProgress(double elapsed, double total, int loopCount, bool paused)
     {
         PanelCountdown.IsVisible = false;
         PanelProgress.IsVisible = true;
         Bar.Maximum = Math.Max(0.1, total);
         Bar.Value = Math.Clamp(elapsed, 0, Bar.Maximum);
-        Canvas.SetLeft(Playhead, Math.Clamp(elapsed / Math.Max(0.1, total), 0, 1) * RollCanvas.Width);
+        // 屏幕 x = 音符时间×比例 + 偏移；偏移 = 播放头位置 − 已演奏时间×比例。
+        // 开头处音符正好落在播放头上，左侧留白表示「还没开始」。
+        Canvas.SetLeft(RollContent, RollCanvas.Width * PlayheadFrac - elapsed * _pxPerSec);
         TxtTime.Text = $"{elapsed:F1} / {total:F1} s";
 
         string state = "";
