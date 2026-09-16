@@ -259,8 +259,23 @@ function Invoke-FolderProbe([string]$exe) {
 }
 
 function Get-GitHubToken {
-    $cred = "protocol=https`nhost=github.com`n" | git credential fill
-    $token = ($cred | Where-Object { $_ -like 'password=*' }) -replace '^password=', ''
+    # 这台机器上管道喂不进 git credential fill：PowerShell 的 `|` 与 .NET 的 RedirectStandardInput
+    # 都试过，git 一律报「refusing to work with credential missing protocol field」，
+    # 只有文件重定向可行。所以走临时文件，读完立刻删；令牌只在 %TEMP% 停留一瞬间。
+    $req = Join-Path $env:TEMP 'midikey-cred-req.txt'
+    $res = Join-Path $env:TEMP 'midikey-cred-out.txt'
+    [System.IO.File]::WriteAllText($req, "protocol=https`nhost=github.com`n", (New-Object System.Text.ASCIIEncoding))
+    Remove-Item $res -ErrorAction SilentlyContinue
+
+    & cmd.exe /c "git credential fill < `"$req`" > `"$res`"" | Out-Null
+
+    $token = ''
+    if (Test-Path -LiteralPath $res) {
+        foreach ($line in (Get-Content -LiteralPath $res)) {
+            if ($line -like 'password=*') { $token = $line.Substring(9).Trim() }
+        }
+    }
+    Remove-Item $req, $res -ErrorAction SilentlyContinue
     if ([string]::IsNullOrWhiteSpace($token)) { throw '取不到 GitHub 令牌（git credential fill 没返回 password）。' }
     return $token
 }
