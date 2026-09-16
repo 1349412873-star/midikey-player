@@ -285,10 +285,10 @@ THIRD-PARTY-NOTICES.md      # 第三方组件许可声明
 7. 提交、推 main、打 tag、建 Release、上传 zip。
 
 ```
-pwsh -File tools\release.ps1 -DryRun                        # 只看会发什么
-pwsh -File tools\release.ps1 -Notes "（这一版改了什么）"      # 自己写日志
-pwsh -File tools\release.ps1 -SkipPush                      # 只构建验证，不提交不发布
-pwsh -File tools\release.ps1 -TrimParity                    # 加做裁剪比对
+powershell -File tools\release.ps1 -DryRun                     # 只看会发什么
+powershell -File tools\release.ps1 -Notes "（这一版改了什么）"   # 自己写日志
+powershell -File tools\release.ps1 -SkipPush                   # 只构建验证，不提交不发布
+powershell -File tools\release.ps1 -TrimParity                 # 加做裁剪比对
 ```
 
 规则：每次发 release 一律发新版本。已经发布的包不动、不覆盖、不重传。

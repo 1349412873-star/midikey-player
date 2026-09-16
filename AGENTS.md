@@ -6,10 +6,10 @@
 
 - 每次发 release 一律发新版本。版本号自动加一（默认补丁号 +1）。
 - 已经发布的包不动、不覆盖、不重传。tag 已存在就停手。
-- 发版走脚本：`pwsh -File tools\release.ps1`。它按顺序做版本号、日志、构建、自检、
+- 发版走脚本：`powershell -File tools\release.ps1`。它按顺序做版本号、日志、构建、自检、
   界面快照、提交、打 tag、建 Release、传 zip。
-- 想先看会发什么：`pwsh -File tools\release.ps1 -DryRun`。
-- 想只构建不发布：`pwsh -File tools\release.ps1 -SkipPush`。
+- 想先看会发什么：`powershell -File tools\release.ps1 -DryRun`。
+- 想只构建不发布：`powershell -File tools\release.ps1 -SkipPush`。
 - 动过裁剪设置或升级依赖之后，加 `-TrimParity`，比对裁剪版与不裁剪版的快照。
 
 ## 更新日志必须有历史记录
