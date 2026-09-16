@@ -141,6 +141,11 @@ public static class GlobalHotkeys
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr GetModuleHandleW(string? lpModuleName);
 
+    // PostThreadMessageW 认的是 Win32 原生线程 id，不是托管线程 id
+    // （Environment.CurrentManagedThreadId 是另一套编号，发过去等于发丢）。
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+
     private static readonly LowLevelKeyboardProc WinProc = WinHookCallback;
     private static IntPtr _winHook;
 
@@ -161,7 +166,8 @@ public static class GlobalHotkeys
         {
             // A08：先写线程 id 再注册钩子。这样 Start() 的 _ready.Wait 返回后 id 一定可用，
             // Stop() 一定能发出 WM_QUIT（注册失败时也能让消息循环立刻退出）。
-            _winThreadId = (uint)Environment.CurrentManagedThreadId;
+            // 必须是原生线程 id：PostThreadMessageW 不认托管线程 id（Environment.CurrentManagedThreadId）。
+            _winThreadId = GetCurrentThreadId();
             _ready.Set();
 
             using var cur = Process.GetCurrentProcess();

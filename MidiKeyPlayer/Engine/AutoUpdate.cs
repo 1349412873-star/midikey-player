@@ -8,11 +8,11 @@ namespace MidiKeyPlayer.Engine;
 public static class AutoUpdate
 {
     /// <summary>
-    /// 自动更新开关。仓库目前是私有库，未带凭据的检查会返回 404，所以保持关闭；
-    /// 仓库转为公开后改成 true 即可。用 static readonly 而不是 const：
-    /// const 为 false 时编译器会把后面整段检查代码判成不可达并报 CS0162。
+    /// 自动更新开关。仓库已转为公开（v1.0.9 起开启检查；私有库时期未带凭据的检查会返回 404）。
+    /// 用 static readonly 而不是 const：const 为 false 时编译器会把后面整段检查代码
+    /// 判成不可达并报 CS0162。
     /// </summary>
-    private static readonly bool Enabled = false;
+    private static readonly bool Enabled = true;
 
     private const string Owner = "ChickenD233";
     private const string Repo = "midikey-player";

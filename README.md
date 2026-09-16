@@ -328,9 +328,9 @@ tag 已存在，脚本直接停手。日志里没有当前版本号那一节，`
 
 ## 自动更新
 
-启动时的更新检查**默认关闭**。原因：当前发布在私有库，不带凭据的检查会返回 404。
+启动时的更新检查**默认开启**（仓库已公开，v1.0.9 起）。有新版时界面提示并可跳转 Release 页。
 
-源码在 `MidiKeyPlayer/Engine/AutoUpdate.cs`。仓库转为公开后，把 `Enabled` 改成 `true` 即可。
+源码在 `MidiKeyPlayer/Engine/AutoUpdate.cs`。要关掉检查，把 `Enabled` 改成 `false`。
 
 ## 设置迁移
 

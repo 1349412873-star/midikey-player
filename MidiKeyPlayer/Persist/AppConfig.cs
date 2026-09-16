@@ -256,7 +256,12 @@ public sealed class AppConfig
         try
         {
             Directory.CreateDirectory(DirPath);
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(this, ConfigJson.Default.AppConfig));
+            string json = JsonSerializer.Serialize(this, ConfigJson.Default.AppConfig);
+            // 原子写入：先写临时文件再替换。直接覆盖写时若中途崩溃，settings.json 会被截断，
+            // 下次启动读到半个 JSON，Load 的 catch 会静默回退默认值（速度、热键、方案记忆全丢）。
+            string tmp = FilePath + ".tmp";
+            File.WriteAllText(tmp, json);
+            File.Move(tmp, FilePath, overwrite: true);
         }
         catch (Exception ex) { LogFile.Append("[设置] 保存失败：" + ex.Message); }
     }
@@ -265,9 +270,8 @@ public sealed class AppConfig
 /// <summary>
 /// 源生成的 JSON 上下文。设置读写必须走它，不能用 JsonSerializer 的反射重载。
 ///
-/// 当前发布**没有开裁剪**（csproj 里没有 PublishTrimmed）：不开的理由与设置无关，
-/// 是 Avalonia 的 XAML 绑定与 DryWetMidi 依赖反射，裁剪的风险大于体积收益。
-/// 设置这条链上则已经彻底不用反射：源生成在编译期产出读写代码。
+/// 当前发布**开裁剪**（csproj 里 PublishTrimmed=true，反射相关程序集用
+/// TrimmerRootAssembly 钉住）。设置这条链上则已经彻底不用反射：源生成在编译期产出读写代码。
 ///
 /// 这条链原来踩过坑，所以固定成源生成：反射式序列化依赖的元数据一旦被裁掉，
 /// 运行时抛异常。而 Save / Load 原先都静默吞掉异常 —— 结果是设置从未写盘，

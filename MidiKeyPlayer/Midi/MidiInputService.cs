@@ -166,7 +166,9 @@ public static class MidiInputService
     private static void OnDeviceError(object? sender, ErrorOccurredEventArgs e)
     {
         Error?.Invoke($"MIDI 设备异常：{e.Exception?.Message ?? "未知错误"}");
-        // 只在设备是当前监听设备时算"断开"，避免已停用的旧设备回调误伤正在演奏的设备
-        if (IsListening) DeviceLost?.Invoke();
+        // 只在报错的设备就是当前监听设备时算"断开"：IsListening 只看「有没有设备在听」，
+        // 旧设备清理失败后残留的回调可能在新设备演奏时到达，不能误伤正在演奏的设备。
+        lock (Gate) { if (sender == null || !ReferenceEquals(sender, _device)) return; }
+        DeviceLost?.Invoke();
     }
 }

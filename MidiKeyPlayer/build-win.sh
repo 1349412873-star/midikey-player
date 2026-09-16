@@ -113,7 +113,8 @@ rm -rf "$OUT"
 # 单文件发布属性（PublishSingleFile / SelfContained / RuntimeIdentifier /
 # IncludeNativeLibrariesForSelfExtract / EnableCompressionInSingleFile / DebugType）
 # 统一写在 MidiKeyPlayer.csproj 里，避免「直接 dotnet publish 不带参数」
-# 时又产出多文件目录。这里只保留命令行入口，不重复传参。当前不开裁剪，理由见 csproj。
+# 时又产出多文件目录。这里只保留命令行入口，不重复传参。裁剪同样开在 csproj 里
+# （PublishTrimmed=true + TrimmerRootAssembly 钉住表，理由与实测记录见 csproj 注释）。
 "$DOTNET" publish MidiKeyPlayer.csproj -c Release -o "$OUT"
 
 EXE="$OUT/MidiKeyPlayer.exe"

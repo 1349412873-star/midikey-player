@@ -56,8 +56,8 @@ public sealed class KeymapFormatException : Exception
 /// 键位方案：把「键名 → 半音偏移」与修饰键全部交给配置。
 ///
 /// 活动方案是 <see cref="Current"/>（全局一份）。文件在 %LOCALAPPDATA%\MidiKeyPlayer\keymap.json。
-/// 序列化走源生成上下文 <see cref="KeymapJson"/>：当前发布并没有开裁剪，
-/// 但源生成更稳（启动更快、不受将来裁剪影响），所以不退回反射重载。
+/// 序列化走源生成上下文 <see cref="KeymapJson"/>：发布开裁剪（PublishTrimmed），
+/// 反射式序列化依赖的元数据可能被裁掉；源生成在编译期产出读写代码，不受裁剪影响。
 /// </summary>
 public sealed class KeymapProfile
 {
