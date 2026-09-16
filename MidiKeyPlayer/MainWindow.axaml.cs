@@ -70,6 +70,8 @@ public partial class MainWindow : Window
     private string _updateNewExe = "";     // 已下载且校验通过的新 exe；空 = 尚未就绪
     private bool _updateBusy;              // 正在下载或正在应用更新
     private CancellationTokenSource? _updateCts;
+    private OverlayWindow? _overlay;        // 播放悬浮窗（倒计时 / 进度 / 当前音）
+    private MappingResult? _lastMapping;    // 最近一次映射结果（LblWarn 的「跳过明细」用）
 
     /// <summary>
     /// UI-01 / UI-02：有手动改动、而且这份改动还没导出过 MIDI。
@@ -117,6 +119,9 @@ public partial class MainWindow : Window
         ChkAutoMinimize.IsChecked = _cfg.AutoMinimizeOnPlay;
         ChkShowPreflight.IsChecked = _cfg.ShowPreflight;
         PreflightRow.IsVisible = _cfg.ShowPreflight;   // 默认开：自检常驻主界面状态卡
+        ChkOverlay.IsChecked = _cfg.OverlayEnabled;    // 悬浮窗默认开
+        TxtAboutVersion.Text = $"MIDI 按键播放器 v{AutoUpdate.CurrentVersion}";
+        if (_cfg.DisclaimerAccepted) DisclaimerBar.IsVisible = false;   // 确认过一次就不再显示
         ThemeCombo.ItemsSource = ThemeSwitch.Names;    // 自动 / 浅色 / 深色，下标就是设置里的取值
         ThemeCombo.SelectedIndex = ThemeSwitch.Clamp(_cfg.ThemeMode);
         TimingCombo.SelectedIndex = Math.Clamp(_cfg.TimingIndex, 0, 2);
@@ -222,6 +227,15 @@ public partial class MainWindow : Window
         InsertLog("欢迎使用 MIDI 按键播放器");
         InsertLog("用法：打开 MIDI → 点一行作为主旋律 → 按 F6，倒计时内切到目标程序并装备乐器。");
         InsertLog("控制热键：F6 = 开始 / 暂停 / 继续（目标程序中生效，可改）。");
+
+        // 自动更新成功确认：版本号与上次运行不同 → 刚被更新流程替换过，写日志留证
+        string curVer = AutoUpdate.CurrentVersion;
+        if (_cfg.LastRunVersion.Length > 0 && _cfg.LastRunVersion != curVer)
+        {
+            InsertLog($"已自动更新：v{_cfg.LastRunVersion} → v{curVer}");
+            global::MidiKeyPlayer.Persist.LogFile.Append($"[更新] 已从 v{_cfg.LastRunVersion} 更新到 v{curVer}");
+        }
+        if (_cfg.LastRunVersion != curVer) { _cfg.LastRunVersion = curVer; _cfg.Save(); }
         // 探针模式不建托盘图标：无人值守跑测，不往用户托盘里塞东西
         if (OperatingSystem.IsWindows() && !PreviewProbeMode.On)
         {
@@ -2345,7 +2359,18 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (_updateBusy) return;
+        if (_updateBusy)
+        {
+            // 下载中再点一次 = 取消下载（正在应用更新的那一下不可取消）
+            if (_updateNewExe.Length == 0 && _updateCts != null)
+            {
+                _updateCts.Cancel();
+                _updateBusy = false;
+                TxtUpdate.Text = "已取消下载——点此重新下载；右键跳过本版本。";
+                InsertLog("已取消更新包下载。");
+            }
+            return;
+        }
 
         // 更新包已下载并校验通过：这一次点击 = 重启并完成更新
         if (_updateNewExe.Length > 0)
@@ -2433,6 +2458,143 @@ public partial class MainWindow : Window
         if (_engine != null) StopPlaybackNow();
         Close();
     }
+
+    // ================= 「关于」：手动检查更新 + 内置文档 =================
+
+    /// <summary>手动检查更新：结果直说（静默检查失败是吞掉的，手动不行）。</summary>
+    private async void CheckUpdateManual_Click(object? sender, RoutedEventArgs e)
+    {
+        BtnCheckUpdate.IsEnabled = false;
+        InsertLog("正在检查更新……");
+        try
+        {
+            var r = await AutoUpdate.CheckAsync(_cfg?.SkippedUpdateTag);
+            if (r.Error != null)
+            {
+                InsertLog("检查更新失败（网络不通或被拦截），稍后再试。原因见 play.log。");
+                global::MidiKeyPlayer.Persist.LogFile.Append($"[更新] 手动检查失败：{r.Error}");
+                return;
+            }
+            if (r.HasUpdate)
+            {
+                _updateUrl = r.ReleaseUrl;
+                _updateTag = r.LatestTag;
+                _updateAssetUrl = r.AssetUrl;
+                // 已跳过的版本也摆出来：手动检查就是用户反悔的机会
+                TxtUpdate.Text = r.Skipped
+                    ? $"v{r.LatestTag}（当前 v{r.CurrentTag}）已被你跳过——点此仍可下载并更新；右键继续跳过。"
+                    : $"发现新版本 v{r.LatestTag}（当前 v{r.CurrentTag}）——点此自动下载并更新；右键跳过本版本。";
+                UpdateBanner.IsVisible = true;
+                InsertLog($"发现新版本：v{r.LatestTag}（当前 v{r.CurrentTag}）");
+            }
+            else
+            {
+                InsertLog($"已是最新版本（v{r.CurrentTag}）。");
+            }
+        }
+        finally
+        {
+            BtnCheckUpdate.IsEnabled = true;
+        }
+    }
+
+    /// <summary>「关于」里的文档按钮：显示嵌在 exe 里的合规文本（avares 资源，见 csproj）。</summary>
+    private void Doc_Click(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button b || b.Tag is not string resName || resName.Length == 0) return;
+        string title = b.Content?.ToString() ?? resName;
+        try
+        {
+            using var s = Avalonia.Platform.AssetLoader.Open(new Uri($"avares://MidiKeyPlayer/Docs/{resName}"));
+            using var reader = new System.IO.StreamReader(s);
+            new DocWindow().ShowDoc(this, title, reader.ReadToEnd());
+        }
+        catch (Exception ex)
+        {
+            InsertLog($"打开{title}失败：{ex.Message}");
+            global::MidiKeyPlayer.Persist.LogFile.Append($"[关于] 读内置文档 {resName} 失败：{ex}");
+        }
+    }
+
+    // ================= 跳过音明细（LblWarn 点击查看） =================
+
+    /// <summary>LblWarn：有音被跳过时点击看明细；全部有键或没载入时不响应。</summary>
+    private void LblWarn_PointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        var m = _lastMapping;
+        if (m == null || m.SkipCount == 0) return;
+        ShowSkippedNotes(m);
+    }
+
+    /// <summary>弹出被跳过音符的明细：时间、音高、原因（数据来自最近一次映射，最多列 500 条）。</summary>
+    private void ShowSkippedNotes(MappingResult m)
+    {
+        var skipped = m.Notes.Where(n => !n.InRange).OrderBy(n => n.Start).ToList();
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"共 {skipped.Count} 个音被跳过（按时间排序）。这些音演奏时不发声；");
+        sb.AppendLine("可以用「移调」或换键位方案把它们拉回能弹的范围。");
+        sb.AppendLine();
+        foreach (var n in skipped.Take(500))
+            sb.AppendLine($"{n.Start,8:F2}s    {Music.SolfegeName(n.Pitch)}    {n.SkipReason}");
+        if (skipped.Count > 500)
+            sb.AppendLine($"…… 其余 {skipped.Count - 500} 条从略。");
+        new DocWindow().ShowDoc(this, "被跳过的音", sb.ToString());
+    }
+
+    // ================= 播放悬浮窗 =================
+
+    /// <summary>悬浮窗开关：勾上时若正在播放立刻补出；取消时立刻关掉。设置即时生效。</summary>
+    private void Overlay_Changed(object? sender, RoutedEventArgs e)
+    {
+        if (_cfg != null) _cfg.OverlayEnabled = ChkOverlay.IsChecked == true;
+        ScheduleSave();
+        if (!_uiReady) return;
+        if (ChkOverlay.IsChecked == true)
+        {
+            if (_engine is { IsRunning: true } eng) ShowOverlayProgress(eng);
+        }
+        else
+        {
+            HideOverlay();
+        }
+    }
+
+    /// <summary>创建（或取出）悬浮窗，并接上位置记忆。</summary>
+    private OverlayWindow EnsureOverlay()
+    {
+        if (_overlay != null) return _overlay;
+        var w = new OverlayWindow();
+        w.DragFinished += (x, y) =>
+        {
+            if (_cfg == null) return;
+            _cfg.OverlayX = x;
+            _cfg.OverlayY = y;
+            ScheduleSave();
+        };
+        w.Closed += (_, _) => { if (ReferenceEquals(_overlay, w)) _overlay = null; };
+        _overlay = w;
+        return w;
+    }
+
+    /// <summary>倒计时期间的悬浮窗（开关关掉时不显示）。</summary>
+    private void ShowOverlayCountdown(int secondsLeft)
+    {
+        if (ChkOverlay.IsChecked != true) return;
+        var w = EnsureOverlay();
+        w.ShowCountdown(secondsLeft);
+        w.RestorePosition(_cfg?.OverlayX ?? -1, _cfg?.OverlayY ?? -1);
+    }
+
+    /// <summary>演奏期间的悬浮窗（开关关掉时不显示）。</summary>
+    private void ShowOverlayProgress(PlaybackEngine eng)
+    {
+        if (ChkOverlay.IsChecked != true) return;
+        var w = EnsureOverlay();
+        w.ShowProgress(eng.ElapsedSeconds, eng.TotalSeconds, eng.CurrentNote, eng.LoopCount, eng.IsPaused);
+        w.RestorePosition(_cfg?.OverlayX ?? -1, _cfg?.OverlayY ?? -1);
+    }
+
+    private void HideOverlay() => _overlay?.Close();
 
     /// <summary>输入兼容档位：只影响下一次开始播放时的事件时序，不需要刷新预览。</summary>
     private void Timing_Changed(object? sender, SelectionChangedEventArgs e)
@@ -2859,6 +3021,7 @@ public partial class MainWindow : Window
 
         var raw = GetActiveRawNotes();
         var m = raw.Count == 0 ? new MappingResult() : NoteMapper.Map(raw, CurrentTranspose, null);
+        _lastMapping = m;   // LblWarn 的「跳过明细」按这份结果显示
         // 声轨颜色：左侧列表的文字色与卷帘音符色用同一个序号
         var voiceMap = BuildVoiceMap(raw);
         ApplyVoiceBrushes();
@@ -2970,6 +3133,7 @@ public partial class MainWindow : Window
         {
             _countdownLeft = cd;
             UpdateCountdownText();
+            ShowOverlayCountdown(cd);   // 悬浮窗同步倒计时（开关关掉时内部直接返回）
             InsertLog($"{cd} 秒后开始——请切到目标窗口并装备乐器…");
             _countdownTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
             _countdownTimer.Tick += (_, _) =>
@@ -2984,6 +3148,7 @@ public partial class MainWindow : Window
                 else
                 {
                     UpdateCountdownText();
+                    ShowOverlayCountdown(_countdownLeft);
                 }
             };
             _countdownTimer.Start();
@@ -3114,8 +3279,10 @@ public partial class MainWindow : Window
                 LblStatus.Foreground = OkBrush;
                 LblStatus.Text = eng.CurrentNote;
             }
+            ShowOverlayProgress(eng);   // 悬浮窗跟随（含「已暂停」状态；开关关掉时内部直接返回）
         };
         _uiTimer.Start();
+        ShowOverlayProgress(engine);   // 倒计时是 0 秒时这里没有等待期，立刻摆出进度
     }
 
     private void OnEngineFinished()
@@ -3157,6 +3324,12 @@ public partial class MainWindow : Window
     private void Disclaimer_PointerPressed(object? sender, Avalonia.Input.PointerPressedEventArgs e)
     {
         if (sender is Border b) b.IsVisible = false;
+        // 确认过一次就记住：条款没有变，之后启动不再显示
+        if (_cfg != null && !_cfg.DisclaimerAccepted)
+        {
+            _cfg.DisclaimerAccepted = true;
+            _cfg.Save();
+        }
     }
 
     private void ResetUi()
@@ -3174,6 +3347,7 @@ public partial class MainWindow : Window
         LblStatus.FontSize = ResourceFontSize("FontDisplay", 22);
         SetCountdownChrome(false);
         SetIdleHint();
+        HideOverlay();   // 停止 / 播完 / 倒计时取消都经过这里：悬浮窗一起收
         // A03：回到空闲就把记住的目标窗口丢掉，避免下一次停止把焦点还给一个早就关掉的窗口。
         _gameHwnd = IntPtr.Zero;
     }
@@ -3329,6 +3503,8 @@ public partial class MainWindow : Window
     internal void DevCleanUpForExit()
     {
         _updateCts?.Cancel();   // 退出时取消进行中的更新包下载
+        _overlay?.Close();
+        _overlay = null;
         _countdownTimer?.Stop();
         _liveTimer?.Stop();
         _uiTimer?.Stop();

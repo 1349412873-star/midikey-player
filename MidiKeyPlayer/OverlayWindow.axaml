@@ -1,0 +1,50 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="MidiKeyPlayer.OverlayWindow"
+        Title="MidiKeyPlayer 悬浮窗"
+        Topmost="True"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        CanResize="False"
+        SystemDecorations="None"
+        TransparencyLevelHint="Transparent"
+        Background="Transparent"
+        SizeToContent="WidthAndHeight"
+        FontFamily="{DynamicResource FontUi}">
+
+  <!-- 播放悬浮窗：倒计时时大号数字，开始演奏后进度条 + 当前音。
+       深色半透明卡片：浮在游戏画面上与深浅皮肤都无关，固定这一套色。
+       按住卡片可拖动，松手后位置由主窗写进设置。 -->
+  <Border x:Name="Card" CornerRadius="10" Padding="14,10"
+          Background="#E6141820" BorderBrush="#40FFFFFF" BorderThickness="1"
+          PointerPressed="Card_PointerPressed" PointerReleased="Card_PointerReleased">
+    <StackPanel Spacing="6">
+
+      <!-- 倒计时态 -->
+      <StackPanel x:Name="PanelCountdown" Spacing="2" IsVisible="False" MinWidth="150">
+        <TextBlock x:Name="TxtCountdown" Text="3" FontSize="38" FontWeight="Bold"
+                   Foreground="#FFFFD166" HorizontalAlignment="Center"/>
+        <TextBlock Text="秒后开始 · F6 可取消" FontSize="11" Foreground="#BFFFFFFF"
+                   HorizontalAlignment="Center"/>
+      </StackPanel>
+
+      <!-- 演奏态：当前音 + 进度 + 时间 -->
+      <StackPanel x:Name="PanelProgress" Spacing="5" Width="230" IsVisible="False">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock x:Name="TxtNote" Text="演奏中…" FontSize="13" FontWeight="SemiBold"
+                     Foreground="#FFFFFFFF" TextTrimming="CharacterEllipsis"/>
+          <TextBlock x:Name="TxtLoop" Grid.Column="1" Text="" FontSize="11"
+                     Foreground="#BFFFFFFF" VerticalAlignment="Center" Margin="8,0,0,0"/>
+        </Grid>
+        <ProgressBar x:Name="Bar" Minimum="0" Maximum="100" Value="0" Height="6"
+                     Foreground="#FF4CAF7D" Background="#33FFFFFF"/>
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock x:Name="TxtTime" Text="0.0 / 0.0 s" FontSize="11" Foreground="#BFFFFFFF"/>
+          <TextBlock x:Name="TxtPaused" Grid.Column="1" Text="已暂停" FontSize="11"
+                     Foreground="#FFFFD166" IsVisible="False"/>
+        </Grid>
+      </StackPanel>
+
+    </StackPanel>
+  </Border>
+</Window>

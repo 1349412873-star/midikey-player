@@ -62,8 +62,8 @@
                  TextTrimming="CharacterEllipsis" Text="就绪"/>
     </Border>
 
-    <!-- 免责声明，点击关闭 -->
-    <Border DockPanel.Dock="Bottom" Margin="0,12,0,0" Background="{DynamicResource BrushDangerSoft}"
+    <!-- 免责声明，点击关闭；确认过一次后写进设置，不再显示 -->
+    <Border x:Name="DisclaimerBar" DockPanel.Dock="Bottom" Margin="0,12,0,0" Background="{DynamicResource BrushDangerSoft}"
             BorderBrush="{DynamicResource BrushDangerBorder}" BorderThickness="1" CornerRadius="10" Padding="12,8"
             PointerPressed="Disclaimer_PointerPressed" Cursor="Hand">
       <Grid ColumnDefinitions="*,Auto">
@@ -245,7 +245,9 @@
                        FontSize="{DynamicResource FontBody}" TextAlignment="Center"
                        Text="打开 MIDI 文件，再在左侧点一行作为主旋律"/>
             <TextBlock x:Name="LblWarn" TextWrapping="Wrap" TextAlignment="Center"
-                       FontSize="{DynamicResource FontSmall}" Text=""/>
+                       FontSize="{DynamicResource FontSmall}" Text=""
+                       PointerPressed="LblWarn_PointerPressed"
+                       ToolTip.Tip="有音被跳过时，点这里看明细（哪些音、什么时间、什么原因）"/>
             <!-- UI-01 / UI-02：常驻的「有未导出改动」提示。手动改动只在内存里，
                  换歌与关窗都会丢弃，所以不能只靠「还原为自动」按钮变亮来暗示。 -->
             <TextBlock x:Name="TxtEditMark" IsVisible="False" TextWrapping="Wrap" TextAlignment="Center"
@@ -649,9 +651,38 @@
                       FontSize="{DynamicResource FontSmall}" IsChecked="True" VerticalAlignment="Center"
                       IsCheckedChanged="ShowPreflight_Changed"
                       ToolTip.Tip="勾选时，主界面右上方的状态卡里常驻显示自检结论与「刷新」按钮。关掉后主界面不再显示这三样"/>
+            <CheckBox x:Name="ChkOverlay" Content="播放悬浮窗（倒计时 / 进度）"
+                      FontSize="{DynamicResource FontSmall}" IsChecked="True" VerticalAlignment="Center"
+                      IsCheckedChanged="Overlay_Changed"
+                      ToolTip.Tip="勾选时，倒计时与演奏期间在屏幕右上角显示一个置顶悬浮窗：倒计时秒数、进度条与当前音。浮窗可拖动，位置自动记忆"/>
           </WrapPanel>
           <TextBlock Classes="caption" TextWrapping="Wrap" LineHeight="19"
-                     Text="皮肤分浅色（白）与深色（黑），也可以跟随系统。自检常驻在主界面右上方的状态卡里，这里关掉就不再显示。"/>
+                     Text="皮肤分浅色（白）与深色（黑），也可以跟随系统。自检常驻在主界面右上方的状态卡里，这里关掉就不再显示。悬浮窗浮在目标程序画面上，倒计时与演奏进度不用切回来看。"/>
+        </StackPanel>
+      </Border>
+
+      <!-- 关于：版本号、手动检查更新、内置文档查看。
+           更新说明 / 第三方声明 / 许可证三份文本由 csproj 以 AvaloniaResource 嵌进 exe，
+           这里提供界面入口；更新日志不进 exe（只随发布包附带），不在这里列。 -->
+      <Border Classes="card" Padding="14,10">
+        <StackPanel Spacing="6">
+          <TextBlock Text="关于" Classes="sectionLabel" FontSize="{DynamicResource FontSmall}"
+                     FontWeight="SemiBold"/>
+          <WrapPanel ItemSpacing="14" LineSpacing="8">
+            <TextBlock x:Name="TxtAboutVersion" Classes="label" VerticalAlignment="Center"/>
+            <Button x:Name="BtnCheckUpdate" Content="检查更新" FontSize="{DynamicResource FontSmall}"
+                    Padding="12,5" Classes="secondary" VerticalAlignment="Center"
+                    Click="CheckUpdateManual_Click"
+                    ToolTip.Tip="立刻检查 GitHub 上有没有新版本。有新版时主界面顶部会出现提示条"/>
+            <Button Content="更新说明" FontSize="{DynamicResource FontSmall}" Tag="更新说明.txt"
+                    Padding="12,5" Classes="secondary" VerticalAlignment="Center" Click="Doc_Click"/>
+            <Button Content="第三方声明" FontSize="{DynamicResource FontSmall}" Tag="THIRD-PARTY-NOTICES.md"
+                    Padding="12,5" Classes="secondary" VerticalAlignment="Center" Click="Doc_Click"/>
+            <Button Content="许可证" FontSize="{DynamicResource FontSmall}" Tag="LICENSE"
+                    Padding="12,5" Classes="secondary" VerticalAlignment="Center" Click="Doc_Click"/>
+          </WrapPanel>
+          <TextBlock Classes="caption" TextWrapping="Wrap" LineHeight="19"
+                     Text="发现新版本时主界面顶部会出现提示条：点它自动下载并更新，右键跳过本版本。累积更新日志在发布包的 更新日志.txt 里。"/>
         </StackPanel>
       </Border>
 

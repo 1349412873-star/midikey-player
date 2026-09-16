@@ -49,6 +49,13 @@ public sealed class AppConfig
     public int ThemeMode { get; set; } = 0;           // 皮肤：0 自动（跟随系统）/ 1 浅色 / 2 深色
     public int TimingIndex { get; set; } = 1;         // 输入兼容档位：0稳健/1标准/2极限
     public string SkippedUpdateTag { get; set; } = "";   // 用户选择“跳过”的版本号（空=不跳过）
+    public bool DisclaimerAccepted { get; set; } = false;  // 免责声明确认过一次后不再显示
+    public string LastRunVersion { get; set; } = "";    // 上次运行的版本号（自动更新成功确认用）
+
+    // —— 播放悬浮窗（倒计时 / 进度 / 当前音，置顶显示在目标程序上）——
+    public bool OverlayEnabled { get; set; } = true;    // 悬浮窗开关（默认开）
+    public int OverlayX { get; set; } = -1;             // 悬浮窗位置（-1 = 默认屏幕右上角）
+    public int OverlayY { get; set; } = -1;
 
     // —— 键位方案 ——
     public string KeymapName { get; set; } = KeymapProfile.DefaultName;  // 当前键位方案名

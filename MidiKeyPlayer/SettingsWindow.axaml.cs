@@ -37,9 +37,9 @@ public partial class SettingsWindow : Window
         if (Pages == null) return;   // 构造早期的防御
         bool keymapPage = Pages.SelectedIndex == 1;
         MinWidth = keymapPage ? 720 : 560;
-        MinHeight = keymapPage ? 560 : 420;
+        MinHeight = keymapPage ? 560 : 520;
         Width = keymapPage ? 900 : 640;
-        Height = keymapPage ? 680 : 470;
+        Height = keymapPage ? 680 : 600;   // 常规页多了「关于」卡：默认高度要让四张卡都露出来
     }
 
     private void CloseSettings_Click(object? sender, RoutedEventArgs e) => Close();
