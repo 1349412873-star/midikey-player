@@ -12,4 +12,8 @@
 MidiKeyPlayerSmoke/
 
 # ---------- 本地发布产物（成品 exe 改走 GitHub Releases） ----------
+# release/ 是正式产物目录；release-xxx/ 是临时构建实验目录（比对体积用）。
+# 两者都只留在本机，绝不进仓库：一个 exe 有 20 MB 到 45 MB。
 release/
+release-*/
+**/release-*/

@@ -30,15 +30,41 @@
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <!-- 不嵌入 PDB：单文件 exe 是唯一交付物，不带 .pdb 伴生文件。 -->
     <DebugType>none</DebugType>
-    <!-- 不做裁剪（PublishTrimmed）。权衡过：上一轮实测开 partial 能把下载体积从 39.6 MB
-         压到 15.5 MB（见 midikey-audit\fixes\32-single-exe.md:21），收益很大，
-         但裁剪的两个风险来源都在产品主链路上：
-           1. Avalonia 的 XAML 绑定走反射（上面 AvaloniaUseCompiledBindingsByDefault=false）；
-           2. DryWetMidi 大量用反射。
-         两者都没有 trim 注解，一旦被裁到，表现是「开发版正常、发布版静默失效」，
-         正是傻瓜式软件最怕的故障。体积换稳定。
-         注：设置文件不构成理由 —— 它已经走源生成（AppConfig.cs 的 ConfigJson），不受裁剪影响。 -->
+    <!-- 裁剪。上一版关掉了，理由是「Avalonia 的 XAML 绑定走反射，DryWetMidi 大量用反射」。
+         2026-09-16 重新测算并实测，改成「开裁剪 + 钉住反射相关程序集」：
+           不裁剪            exe 45.6 MB
+           只开裁剪          exe 22.1 MB
+           裁剪 + 钉住表     exe 23.0 MB（比只开裁剪多 0.94 MB）
+         钉住（TrimmerRootAssembly）让下面那几个程序集的类型与成员一个都不删，
+         所以 XAML 反射绑定、DryWetMidi 的反射、以及 MainWindow.axaml.cs 里
+         用 StackFrame.GetMethod() 取调用者名字的日志代码都不会被裁掉。
+         实测记录（同一份源码，裁剪版与不裁剪版逐项对比）：
+           1. 内置自检 23 条全部通过，退出码 0。
+           2. 主窗与键位窗渲染成 PNG，逐字节相同（含载入三音轨 MIDI 并全部合奏）。
+           3. 挂 Avalonia 日志监听器跑一遍，一条绑定错误都没有。
+              负向对照能正常打出 Warning，证明这个监听器真的在收日志。
+         复现步骤与完整记录见 midikey-audit\fixes\58-trim-verify.md。 -->
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>partial</TrimMode>
   </PropertyGroup>
+
+  <!-- 裁剪时钉住的程序集：这些程序集的类型与成员必须全部保留。
+         MidiKeyPlayer —— XAML 里 {Binding} 的目标属性只被反射用到，按「入口点可达」裁会删掉；
+         Avalonia 系列 —— 绑定引擎与 XAML 运行时；
+         DryWetMidi    —— MIDI 解析与写出大量用反射。 -->
+  <ItemGroup>
+    <TrimmerRootAssembly Include="MidiKeyPlayer" />
+    <TrimmerRootAssembly Include="Avalonia" />
+    <TrimmerRootAssembly Include="Avalonia.Base" />
+    <TrimmerRootAssembly Include="Avalonia.Controls" />
+    <TrimmerRootAssembly Include="Avalonia.Desktop" />
+    <TrimmerRootAssembly Include="Avalonia.Markup" />
+    <TrimmerRootAssembly Include="Avalonia.Markup.Xaml" />
+    <TrimmerRootAssembly Include="Avalonia.Skia" />
+    <TrimmerRootAssembly Include="Avalonia.Themes.Fluent" />
+    <TrimmerRootAssembly Include="Avalonia.Win32" />
+    <TrimmerRootAssembly Include="Melanchall.DryWetMidi" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="11.3.20" />

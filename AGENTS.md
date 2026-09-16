@@ -17,9 +17,17 @@
 3. 改 `MidiKeyPlayer/docs/更新说明.txt` 第一行的版本号。
 4. 跑 `bash MidiKeyPlayer/build-win.sh`。产物在 `MidiKeyPlayer/release/` 下。
 5. 跑 `tools/run-selftest.ps1 -ExePath <新 exe>`。退出码必须是 0。
-6. 提交并推送 main。打 tag `v<版本>`，发 Release，上传 zip。
+6. 跑一次界面快照，确认界面正常（做法见 README 的「自己打包」）。
+7. 提交并推送 main。打 tag `v<版本>`，发 Release，上传 zip。
+
+## 发布包
+
+- 只放两样东西：`MidiKeyPlayer.exe` 与 `更新日志.txt`。示例曲目不进包。
+- 开裁剪（`PublishTrimmed`）。反射相关的程序集用 `TrimmerRootAssembly` 钉住：
+  `MidiKeyPlayer`、`Avalonia` 系列、`Melanchall.DryWetMidi`。
+  动裁剪设置或升级依赖之后，必须重跑自检与界面快照比对。
+- 体积基线：exe 23.0 MB，zip 17.4 MB。明显变大就查原因。
 
 ## 其它
 
-- 发布包只放两样东西：`MidiKeyPlayer.exe` 与 `更新日志.txt`。示例曲目不进包。
 - 这个程序会发送模拟按键。文档与界面不写具体游戏名或软件名。

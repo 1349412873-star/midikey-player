@@ -49,6 +49,9 @@ v1.0.1    2026-09-16
 
 【发布包】
 - 包里有 MidiKeyPlayer.exe 与 更新日志.txt。
+- 发布包开启裁剪，并钉住反射相关的程序集。exe 45.6 MB 压到 23.0 MB，zip 39.8 MB 压到 17.4 MB。
+  验过：内置自检 23 条全过。主窗与键位窗的渲染结果与不裁剪版逐字节相同。
+  体积对比与复现步骤见 midikey-audit\fixes\58-trim-verify.md。
 - 更新说明、第三方声明与 MIT 许可嵌在 exe 里，不再松散分发。
 - 新增 LICENSE（MIT 许可）、THIRD-PARTY-NOTICES.md、tools\run-selftest.ps1。
 - 删除失效的 按键测试台.html。

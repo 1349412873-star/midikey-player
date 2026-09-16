@@ -12,8 +12,8 @@
 ## 下载
 
 1. 打开右侧 **Releases**。
-2. 下载 `MidiKeyPlayer-win-x64-<版本>.zip`。当前是 `MidiKeyPlayer-win-x64-1.0.1.zip`。
-3. 解压。里面有 `MidiKeyPlayer.exe` 与 `更新日志.txt`。
+2. 下载 `MidiKeyPlayer-win-x64-<版本>.zip`。当前是 `MidiKeyPlayer-win-x64-1.0.1.zip`，约 17 MB。
+3. 解压。里面有 `MidiKeyPlayer.exe`（约 23 MB）与 `更新日志.txt`。
 4. 双击 `MidiKeyPlayer.exe`。
 5. 系统弹出 UAC，选「是」。
 6. 如果弹出 SmartScreen「未知发布者」，选「更多信息」，再选「仍要运行」。
@@ -280,6 +280,21 @@ THIRD-PARTY-NOTICES.md      # 第三方组件许可声明
 
 打包脚本会核对这两处：日志里没有当前版本号那一节，就拒绝打包。
 
+发布包开了裁剪，设置写在 `MidiKeyPlayer.csproj` 里。裁剪会让 exe 从 45.6 MB 降到 23.0 MB。
+反射相关的程序集（`MidiKeyPlayer`、`Avalonia` 系列、`Melanchall.DryWetMidi`）用
+`TrimmerRootAssembly` 钉住，类型与成员一个不删。
+
+改发布形态或升级依赖之后，发布前按顺序做这几项：
+
+1. 跑 `bash MidiKeyPlayer/build-win.sh`，记下 exe 与 zip 的字节数。
+2. 跑 `tools/run-selftest.ps1 -ExePath <新 exe>`，退出码必须是 0。
+3. 跑一次界面快照，与上一版比对：
+   设 `MIDIKEY_UI_SNAPSHOT=<png 路径>`、`MIDIKEY_UI_SNAPSHOT_MIX=all`、
+   `MIDIKEY_UI_SNAPSHOT_MIDI=示例MIDI\示例3-铃儿响叮当-三音轨.mid`，再启动 exe。
+   生成的 PNG 与不裁剪版逐字节相同才算通过。
+4. 曲线验证：临时加一个 `TraceProbe.cs` 挂 Avalonia 日志监听器，确认没有绑定错误。
+   做法与负向对照见 `midikey-audit\fixes\58-trim-verify.md`。
+
 ## 自动更新
 
 启动时的更新检查**默认关闭**。原因：当前发布在私有库，不带凭据的检查会返回 404。
@@ -294,6 +309,7 @@ THIRD-PARTY-NOTICES.md      # 第三方组件许可声明
 ## 技术说明
 
 - 界面：Avalonia（.NET 8）。MIDI 解析与设备接入：DryWetMidi。
+- 发布包：单文件、自包含、开裁剪，反射相关的程序集钉住不裁。zip 约 17 MB，exe 约 23 MB。
 - 第三方组件许可见 `THIRD-PARTY-NOTICES.md`。这份文本嵌在 exe 里。
 - 输入：Windows SendInput，扫描码模式。全局热键：WH_KEYBOARD_LL。
 - 试听：Windows 自带的 winmm MIDI 输出。没有第三方音频库。
